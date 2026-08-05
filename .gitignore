@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+dist/
+build/
+
+# Poetry
+poetry.lock.bak
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Data lake (local only, never committed)
+data/raw/**
+data/processed/**
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# Node / Next.js
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/.env*.local
+!apps/web/.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Alembic
+*.sqlite3

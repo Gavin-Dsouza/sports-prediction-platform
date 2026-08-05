@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "20"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_USER: sports
+          POSTGRES_PASSWORD: sports
+          POSTGRES_DB: sports_prediction_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sports"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        run: pipx install poetry==1.8.3
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pypoetry
+          key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Ruff lint
+        run: poetry run ruff check .
+
+      - name: Ruff format check
+        run: poetry run ruff format --check .
+
+      - name: Mypy type check
+        run: poetry run mypy apps packages
+
+      - name: Alembic migration check (upgrade head runs clean)
+        env:
+          DATABASE_URL: postgresql+psycopg://sports:sports@localhost:5432/sports_prediction_test
+        run: poetry run alembic upgrade head
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+psycopg://sports:sports@localhost:5432/sports_prediction_test
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/1
+          MLFLOW_TRACKING_URI: ./mlruns_ci
+          ODDS_API_KEY: ""
+        run: poetry run pytest --cov --cov-report=term-missing
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build
+
+  docker-compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose config
+        run: |
+          cp .env.example .env
+          docker compose -f infra/docker-compose.yml config --quiet

@@ -1,0 +1,210 @@
+"""Walk-forward backtest engine.
+
+"Walk-forward" means: at each checkpoint date, the ensemble is trained ONLY
+on games before that date, then used to predict every game up to the next
+checkpoint before retraining. This is what prevents the classic backtesting
+sin of a model implicitly "knowing" future results — the same discipline the
+no-leakage feature queries in `packages.features.builders` enforce at the
+single-game level, applied across the whole test period.
+
+Known limitation (documented, not silently papered over): meaningful
+historical odds coverage only exists from whenever this platform started
+polling The Odds API — see the plan's note on historical odds availability.
+Backtesting against seasons before that will show `num_bets=0` for the
+EV-driven strategy (no market price to compare against) even though
+`accuracy`/`log_loss`/`brier_score` (pure model quality, no odds needed)
+are still computed.
+"""
+
+from dataclasses import dataclass
+from datetime import date, timedelta
+from uuid import UUID
+
+import numpy as np
+import pandas as pd
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from packages.core.db_models import BacktestResult, BacktestRun, OddsSnapshot
+from packages.core.enums import Market, PredictorName, Selection
+from packages.core.enums import Sport as SportEnum
+from packages.core.logging import get_logger
+from packages.evaluation.ev_engine import FRACTIONAL_KELLY_MULTIPLIER
+from packages.evaluation.metrics import BacktestMetrics, BetOutcome, compute_backtest_metrics
+from packages.evaluation.odds_math import edge as compute_edge
+from packages.evaluation.odds_math import kelly_fraction, remove_vig_two_way
+from packages.models.dataset import build_training_frame
+from packages.models.ensemble import WeightedEnsemble
+
+logger = get_logger(__name__)
+
+DEFAULT_RETRAIN_EVERY_DAYS = 7
+DEFAULT_MIN_TRAIN_GAMES = 200
+
+
+@dataclass
+class HistoricalQuote:
+    home_decimal_odds: float
+    away_decimal_odds: float
+    home_implied_fair: float
+    away_implied_fair: float
+
+
+def _historical_moneyline_quote(session: Session, game_id: str) -> HistoricalQuote | None:
+    stmt = (
+        select(OddsSnapshot)
+        .where(
+            OddsSnapshot.game_id == UUID(game_id),
+            OddsSnapshot.market == Market.MONEYLINE,
+        )
+        .order_by(OddsSnapshot.captured_at.desc())
+        .limit(20)
+    )
+    recent = list(session.execute(stmt).scalars().all())
+    home_quote = next((q for q in recent if q.selection == Selection.HOME), None)
+    away_quote = next((q for q in recent if q.selection == Selection.AWAY), None)
+    if home_quote is None or away_quote is None:
+        return None
+
+    home_fair, away_fair = remove_vig_two_way(
+        float(home_quote.implied_probability or 0), float(away_quote.implied_probability or 0)
+    )
+    return HistoricalQuote(
+        home_decimal_odds=float(home_quote.price_decimal),
+        away_decimal_odds=float(away_quote.price_decimal),
+        home_implied_fair=home_fair,
+        away_implied_fair=away_fair,
+    )
+
+
+def _iter_checkpoints(
+    start_date: date, end_date: date, retrain_every_days: int
+) -> list[tuple[date, date]]:
+    checkpoints = []
+    cursor = start_date
+    while cursor < end_date:
+        chunk_end = min(cursor + timedelta(days=retrain_every_days), end_date)
+        checkpoints.append((cursor, chunk_end))
+        cursor = chunk_end
+    return checkpoints
+
+
+def run_walk_forward_backtest(
+    session: Session,
+    start_date: date,
+    end_date: date,
+    *,
+    retrain_every_days: int = DEFAULT_RETRAIN_EVERY_DAYS,
+    min_train_games: int = DEFAULT_MIN_TRAIN_GAMES,
+) -> BacktestMetrics:
+    full_frame = build_training_frame(session)
+    if full_frame.empty:
+        raise ValueError("No games with persisted features available to backtest.")
+
+    predicted_probs: list[float] = []
+    actual_outcomes: list[int] = []
+    bet_outcomes: list[BetOutcome] = []
+
+    for checkpoint_start, checkpoint_end in _iter_checkpoints(
+        start_date, end_date, retrain_every_days
+    ):
+        train_frame = full_frame[full_frame["game_date"] < checkpoint_start]
+        test_frame = full_frame[
+            (full_frame["game_date"] >= checkpoint_start)
+            & (full_frame["game_date"] < checkpoint_end)
+        ]
+        if len(train_frame) < min_train_games or test_frame.empty:
+            continue
+
+        ensemble = WeightedEnsemble()
+        ensemble.fit(train_frame)
+        home_win_probs = ensemble.predict_proba(test_frame)
+
+        for i, row in enumerate(test_frame.itertuples(index=False)):
+            predicted_home_prob = float(home_win_probs[i])
+            actual_home_win = int(row.home_win)
+            predicted_probs.append(predicted_home_prob)
+            actual_outcomes.append(actual_home_win)
+
+            quote = _historical_moneyline_quote(session, row.game_id)
+            if quote is None:
+                continue  # no market price for this historical game — see module docstring
+
+            for selection, predicted_prob, decimal_odds, fair_implied, won in (
+                (
+                    Selection.HOME,
+                    predicted_home_prob,
+                    quote.home_decimal_odds,
+                    quote.home_implied_fair,
+                    actual_home_win == 1,
+                ),
+                (
+                    Selection.AWAY,
+                    1 - predicted_home_prob,
+                    quote.away_decimal_odds,
+                    quote.away_implied_fair,
+                    actual_home_win == 0,
+                ),
+            ):
+                if compute_edge(predicted_prob, fair_implied) <= 0:
+                    continue  # strategy under test: only bet positive-EV edges
+                stake = kelly_fraction(predicted_prob, decimal_odds) * FRACTIONAL_KELLY_MULTIPLIER
+                if stake <= 0:
+                    continue
+                bet_outcomes.append(
+                    BetOutcome(
+                        predicted_probability=predicted_prob,
+                        decimal_odds=decimal_odds,
+                        stake=stake,
+                        won=won,
+                    )
+                )
+
+    metrics = compute_backtest_metrics(
+        np.array(predicted_probs), np.array(actual_outcomes), bet_outcomes
+    )
+    logger.info(
+        "backtest_complete",
+        start=start_date.isoformat(),
+        end=end_date.isoformat(),
+        num_predictions=len(predicted_probs),
+        num_bets=metrics.num_bets,
+        roi=metrics.roi,
+    )
+    return metrics
+
+
+def persist_backtest_result(
+    session: Session,
+    *,
+    start_date: date,
+    end_date: date,
+    model_version: str,
+    metrics: BacktestMetrics,
+) -> BacktestRun:
+    run = BacktestRun(
+        sport=SportEnum.MLB,
+        predictor_name=PredictorName.ENSEMBLE,
+        model_version=model_version,
+        start_date=start_date,
+        end_date=end_date,
+        notes=f"Walk-forward backtest, {metrics.num_bets} bets placed.",
+    )
+    session.add(run)
+    session.flush()  # populate run.id before the FK reference below
+
+    result = BacktestResult(
+        backtest_run_id=run.id,
+        market=Market.MONEYLINE,
+        num_bets=metrics.num_bets,
+        accuracy=metrics.accuracy,
+        log_loss=metrics.log_loss,
+        brier_score=metrics.brier_score,
+        roi=metrics.roi,
+        max_drawdown=metrics.max_drawdown,
+        sharpe_ratio=metrics.sharpe_ratio,
+        max_losing_streak=metrics.max_losing_streak,
+        calibration_curve={"buckets": metrics.calibration_curve},
+    )
+    session.add(result)
+    return run
