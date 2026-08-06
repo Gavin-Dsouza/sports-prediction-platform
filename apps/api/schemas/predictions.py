@@ -27,13 +27,37 @@ class GamePredictionOut(BaseModel):
     model_version: str | None
 
 
+class FeatureReasonOut(BaseModel):
+    feature: str
+    contribution: float | None = None
+    importance: float | None = None
+
+
+class SimilarGameOut(BaseModel):
+    game_id: str
+    similarity: float
+    home_team: str
+    away_team: str
+    home_score: int | None
+    away_score: int | None
+
+
+class PredictionExplanationOut(BaseModel):
+    top_reasons: list[FeatureReasonOut]
+    also_considered: list[FeatureReasonOut]
+    shap_model_weight: float
+    similar_games: list[SimilarGameOut]
+
+
 class BetRecommendationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    game_id: UUID
+    game: GameOut
     market: Market
     selection: Selection
+    price_decimal: float | None
+    price_american: int | None
     predicted_probability: float
     market_implied_probability: float
     edge: float
@@ -43,3 +67,4 @@ class BetRecommendationOut(BaseModel):
     confidence_score: float
     rank: int | None
     generated_at: datetime
+    explanation: PredictionExplanationOut | None = None

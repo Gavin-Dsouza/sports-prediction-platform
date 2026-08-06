@@ -1,3 +1,4 @@
+import { CalibrationChart } from "@/components/CalibrationChart";
 import { StatCard } from "@/components/StatCard";
 import { api, type BacktestRun } from "@/lib/api";
 
@@ -61,6 +62,14 @@ export default async function BacktestsPage() {
                 />
                 <StatCard label="Max Drawdown" value={result.max_drawdown?.toFixed(2) ?? "—"} />
                 <StatCard label="Max Losing Streak" value={String(result.max_losing_streak ?? "—")} />
+              </div>
+            ))}
+            {run.results.map((result) => (
+              <div key={`${result.market}-calibration`} className="mt-4">
+                <h3 className="mb-2 text-sm font-medium text-slate-300">
+                  Calibration — {result.market}
+                </h3>
+                <CalibrationChart buckets={result.calibration_curve.buckets} />
               </div>
             ))}
           </div>

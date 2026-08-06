@@ -36,6 +36,7 @@ from packages.core.db import Base
 from packages.core.enums import (
     GameStatus,
     Market,
+    ParlayCategory,
     PredictorName,
     Selection,
     Sport,
@@ -285,6 +286,11 @@ class BetRecommendation(Base):
     market: Mapped[Market] = mapped_column(_str_enum(Market, "market"), nullable=False)
     selection: Mapped[Selection] = mapped_column(_str_enum(Selection, "selection"), nullable=False)
     odds_snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The actual quoted price this recommendation was priced against — without
+    # this, the UI can show implied probabilities but never "bet $X at these
+    # odds," which is what someone acting on the recommendation actually needs.
+    price_decimal: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    price_american: Mapped[int | None] = mapped_column()
     predicted_probability: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
     market_implied_probability: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
     edge: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
@@ -297,7 +303,74 @@ class BetRecommendation(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
+    game: Mapped["Game"] = relationship()
+
     __table_args__ = (Index("ix_bets_recommended_generated_at_rank", "generated_at", "rank"),)
+
+
+class PredictionExplanation(Base):
+    """One row per (ensemble) `Prediction` — SHAP-based feature contributions
+    plus similar historical games, computed once at prediction time rather
+    than on-demand (see `packages.worker.tasks::train_and_recommend`)."""
+
+    __tablename__ = "prediction_explanations"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    prediction_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("predictions.id"), nullable=False, unique=True
+    )
+    feature_contributions: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    similar_games: Mapped[list] = mapped_column(JSONB, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
+class Parlay(Base):
+    """A multi-leg combination of same-day `BetRecommendation`s — see
+    `packages.evaluation.parlay_builder` for how legs are chosen (never more
+    than one per game, the only correlation guard cheap enough to trust
+    without a real cross-game correlation model)."""
+
+    __tablename__ = "parlays"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    num_legs: Mapped[int] = mapped_column(nullable=False)
+    category: Mapped[ParlayCategory] = mapped_column(
+        _str_enum(ParlayCategory, "parlay_category"), nullable=False
+    )
+    combined_probability: Mapped[float] = mapped_column(Numeric(8, 6), nullable=False)
+    combined_decimal_odds: Mapped[float] = mapped_column(Numeric(10, 4), nullable=False)
+    combined_ev: Mapped[float] = mapped_column(Numeric(10, 5), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    legs: Mapped[list["ParlayLeg"]] = relationship(
+        back_populates="parlay", order_by="ParlayLeg.leg_order"
+    )
+
+    __table_args__ = (
+        Index("ix_parlays_generated_at_num_legs_category", "generated_at", "num_legs", "category"),
+    )
+
+
+class ParlayLeg(Base):
+    __tablename__ = "parlay_legs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    parlay_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("parlays.id"), nullable=False)
+    bet_recommendation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("bets_recommended.id"), nullable=False
+    )
+    leg_order: Mapped[int] = mapped_column(nullable=False)
+
+    parlay: Mapped["Parlay"] = relationship(back_populates="legs")
+    bet_recommendation: Mapped["BetRecommendation"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("parlay_id", "leg_order", name="uq_parlay_legs_parlay_leg_order"),
+    )
 
 
 class BacktestRun(Base):

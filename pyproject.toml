@@ -32,6 +32,19 @@ mlflow = "^2.17.0"
 pybaseball = "^2.2.7"
 python-dotenv = "^1.0.1"
 structlog = "^24.4.0"
+# No upper bound, deliberately: 0.46.0 (^0.46.0's effective ceiling) has a
+# real bug under numpy 2.x — `import shap` unconditionally imports its
+# `plots` submodule, which does an LCH->RGB color-palette conversion at
+# module load time (nothing to do with actual explainer computation) that
+# trips numpy 2.x's stricter dtype validation ("TypeError: Converting
+# np.inexact or np.floating to a dtype not allowed"), breaking `import shap`
+# entirely regardless of numba. Letting the resolver take the newest release
+# gives the best chance of a version where that's fixed. If a newer release
+# doesn't fix it either, the real workaround is on the code side (lazy import
+# + graceful degradation — already in packages/evaluation/explainability.py
+# and packages/worker/tasks.py) since this is a bug in shap's own plotting
+# code, not anything under our control.
+shap = ">=0.46.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"

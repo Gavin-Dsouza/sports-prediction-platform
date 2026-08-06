@@ -1,4 +1,4 @@
-# Architecture (Milestone 1)
+# Architecture (Milestone 1, updated through Milestone 2)
 
 ## Repo layout
 
@@ -23,10 +23,17 @@ sports-prediction-platform/
 │   │                     targets), elo.py / poisson_model.py /
 │   │                     logistic_regression.py / xgboost_model.py
 │   │                     (implementations), ensemble.py (auto-weighted blend),
-│   │                     training.py (MLflow-logged training runs)
+│   │                     training.py (MLflow-logged training runs),
+│   │                     registry.py (M2: MLflow registry `champion` alias —
+│   │                     a retrain only takes over serving if it beats the
+│   │                     current champion's validation log loss)
 │   ├── evaluation/        odds_math.py (pure conversions/EV/Kelly),
 │   │                     ev_engine.py (predictions + odds -> recommendations),
-│   │                     metrics.py + backtest.py (walk-forward backtesting)
+│   │                     metrics.py + backtest.py (walk-forward backtesting),
+│   │                     explainability.py (M2: SHAP "why this bet" +
+│   │                     similar-historical-games lookup),
+│   │                     parlay_builder.py (M2: same-game-exclusion
+│   │                     multi-leg parlay construction)
 │   └── worker/           Celery app + beat schedule + tasks
 ├── alembic/              DB migrations (hand-authored initial migration
 │                         mirrors packages/core/db_models.py exactly)

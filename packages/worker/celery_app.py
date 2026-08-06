@@ -5,15 +5,19 @@ a day, since MLB games don't start until the afternoon/evening (US time) and
 new box scores only exist after games finish.
 
 Odds polling frequency is deliberately bounded by The Odds API's free-tier
-quota (500 requests/month), not just by how often lines actually move: at
-1 credit/call (see `get_mlb_odds`'s `markets="h2h"` default), 4 polls/day
-costs ~120 credits/month, comfortably under budget with room for manual
-testing calls. This was originally every 30 minutes around the clock, which
-at even 1 credit/call is ~1,440/month — nearly 3x over budget — before
-accounting for the higher per-call cost of requesting multiple markets.
-Tightening this further (e.g. only during MLB season, or only in the hours
-before/during typical game times) is a reasonable future optimization, not
-required at this volume.
+quota (500 requests/month), not just by how often lines actually move.
+Measured cost against the real API (2026-08-06): a single `markets="h2h"`
+call costs **4 credits**, not the 1 originally assumed — The Odds API bills
+per-market-per-region-per-bookmaker-group, not a flat 1/call, so budgeting
+needs the real number, not a guess. `run_daily_pipeline` also calls
+`poll_odds()` once as part of its own sequence (see `packages.worker.tasks`),
+so total calls/day = this schedule's occurrences + 1. At 2x/day here, that's
+3 calls/day x 4 credits x 30 days = ~360/month, leaving real margin (~140
+credits) for manual/ad-hoc calls during development — the original 4x/day
+schedule (~480-496/month at this real rate) left almost none. This was
+originally every 30 minutes around the clock across 3 markets, which would
+have been roughly 9x over budget. Tightening further (e.g. only during MLB
+season) is a reasonable future optimization, not required at this volume.
 """
 
 from celery import Celery
@@ -46,8 +50,8 @@ celery_app.conf.beat_schedule = {
     },
     "mlb-poll-odds": {
         "task": "packages.worker.tasks.poll_odds",
-        # 4x/day, spread across MLB's typical game window (day games start
-        # ~17:00 UTC, night games run into ~03:00 UTC the next day).
-        "schedule": crontab(hour="15,19,23,3", minute=0),
+        # 2x/day (+ 1 more from run_daily_pipeline's own call) — see the
+        # module docstring for the real per-call cost this is budgeted against.
+        "schedule": crontab(hour="19,23", minute=0),
     },
 }

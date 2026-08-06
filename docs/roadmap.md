@@ -4,14 +4,18 @@ Milestone-based, per the project's development approach: each milestone ships
 production-quality code end-to-end for its scope, gets used/reviewed, and
 only then does the next milestone start.
 
-1. **M1 (current)** — MLB, end-to-end: ingestion (historical + live),
+1. **M1** — MLB, end-to-end: ingestion (historical + live),
    storage, feature engineering, 4 baseline models + ensemble, EV engine,
    walk-forward backtesting, minimal dashboard, CI.
-2. **M2** — Explainability (SHAP values, "why this bet" breakdowns), parlay
-   builder (2–6 leg, correlation-aware), richer dashboard (heatmaps, line
-   movement tracker, injury tracker), auto-retraining loop wired to the daily
-   pipeline, MLflow model registry driving which model version actually
-   serves predictions.
+2. **M2 (current)** — Explainability (SHAP values, "why this bet"
+   breakdowns), parlay builder (2–6 leg, same-game-exclusion correlation
+   guard — real cross-game correlation, e.g. division rivals/shared weather,
+   is a known deferred gap), richer dashboard (calibration chart, line
+   movement tracker, injury tracker, parlay panel), auto-retraining loop
+   wired to the daily pipeline with an MLflow model registry `champion`
+   alias deciding which model version actually serves predictions (a retrain
+   only takes over serving if it beats the current champion's validation log
+   loss, guarded by a Redis lock against concurrent promotion races).
 3. **M3** — Second sport (NBA or NFL) — the real test of whether
    `packages/ingestion`, `packages/features`, `packages/models` boundaries
    generalize, or need rework before scaling to the rest of the sport list.

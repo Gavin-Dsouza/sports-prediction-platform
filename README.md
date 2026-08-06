@@ -44,11 +44,14 @@ replicated to other sports. See `docs/roadmap.md` for what's next.
   follow-up milestone). Odds polling only requests the `h2h` market
   accordingly (see cost note below) — widen it once run line/totals EV logic
   exists, not before.
-- **The Odds API free tier is 500 credits/month**, billed per-market-per-
-  region requested. The beat schedule (`packages/worker/celery_app.py`) polls
-  4x/day at 1 credit/call (~120/month) specifically to stay well under that —
-  don't casually increase the frequency or widen `markets` beyond `h2h`
-  without doing that math again first. It's genuinely easy to blow through
+- **The Odds API free tier is 500 credits/month.** Measured against the real
+  API (not assumed): a single `markets="h2h"` call costs **4 credits**, not
+  1 — budget against the real number, not a guess. The beat schedule
+  (`packages/worker/celery_app.py`) polls 2x/day, plus `run_daily_pipeline`
+  polls once more itself — 3 calls/day x 4 credits x 30 days ≈ 360/month,
+  leaving real margin for manual/ad-hoc calls during development. Don't
+  casually increase frequency or widen `markets` beyond `h2h` without
+  re-measuring the actual cost first. It's genuinely easy to blow through
   500/month by accident (an earlier version of this schedule polled every 30
   minutes across 3 markets — roughly 9x over budget — before being caught).
 

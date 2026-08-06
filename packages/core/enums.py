@@ -57,3 +57,13 @@ class PredictorName(StrEnum):
     LOGISTIC_REGRESSION = "logistic_regression"
     XGBOOST = "xgboost"
     ENSEMBLE = "ensemble"
+
+
+class ParlayCategory(StrEnum):
+    """Which selection criterion produced this parlay among all combinations
+    generated at a given leg count — see packages.evaluation.parlay_builder.
+    """
+
+    BEST_EV = "best_ev"
+    LOW_VARIANCE = "low_variance"
+    HIGH_PAYOUT = "high_payout"

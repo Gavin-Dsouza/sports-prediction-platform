@@ -53,3 +53,25 @@ class LogisticRegressionPredictor:
         if not hasattr(clf, "coef_"):
             return None
         return dict(zip(self._feature_columns, np.abs(clf.coef_[0]).tolist(), strict=True))
+
+    @property
+    def classifier(self) -> SkLogisticRegression:
+        """The raw fitted linear model, exposed for
+        `packages.evaluation.explainability` (SHAP's `LinearExplainer` needs
+        the estimator itself, operating in the same preprocessed space
+        `preprocess()` below produces).
+        """
+        return self._pipeline.named_steps["clf"]
+
+    @property
+    def feature_columns(self) -> list[str]:
+        return self._feature_columns
+
+    def preprocess(self, frame: pd.DataFrame) -> np.ndarray:
+        """Runs impute+scale (every pipeline step except the classifier
+        itself) — the space `classifier` actually operates in, and so the
+        space SHAP's background data / rows to explain both need to be in.
+        """
+        X = frame[self._feature_columns]
+        transformed: np.ndarray = self._pipeline[:-1].transform(X)
+        return transformed

@@ -1,17 +1,26 @@
 import { BetsTable } from "@/components/BetsTable";
 import { GamesTable } from "@/components/GamesTable";
+import { InjuriesPanel } from "@/components/InjuriesPanel";
+import { ParlaysPanel } from "@/components/ParlaysPanel";
 import { StatCard } from "@/components/StatCard";
-import { api, type BetRecommendation, type GamePrediction } from "@/lib/api";
+import { api, type BetRecommendation, type GamePrediction, type Injury, type Parlay } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
 export default async function TodayPage() {
   let predictions: GamePrediction[] = [];
   let bets: BetRecommendation[] = [];
+  let injuries: Injury[] = [];
+  let parlays: Parlay[] = [];
   let fetchError: string | null = null;
 
   try {
-    [predictions, bets] = await Promise.all([api.predictionsToday(), api.recommendedBets()]);
+    [predictions, bets, injuries, parlays] = await Promise.all([
+      api.predictionsToday(),
+      api.recommendedBets(),
+      api.recentInjuries(),
+      api.parlays(),
+    ]);
   } catch (error) {
     fetchError =
       error instanceof Error
@@ -55,7 +64,18 @@ export default async function TodayPage() {
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-slate-200">Model Probabilities vs. Games</h2>
+        <p className="mb-2 text-xs text-slate-500">Click a row to see that game&apos;s line movement.</p>
         <GamesTable predictions={predictions} />
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-lg font-medium text-slate-200">Today&apos;s Parlays</h2>
+        <ParlaysPanel parlays={parlays} />
+      </section>
+
+      <section>
+        <h2 className="mb-3 text-lg font-medium text-slate-200">Recent Injuries</h2>
+        <InjuriesPanel injuries={injuries} />
       </section>
     </div>
   );

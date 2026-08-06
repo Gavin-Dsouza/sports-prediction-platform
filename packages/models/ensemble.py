@@ -54,6 +54,7 @@ class WeightedEnsemble:
         # showed up directly as a real debugging problem — worth the two log
         # lines per model.
         losses: dict[PredictorName, float] = {}
+        val_probs_by_predictor: dict[PredictorName, np.ndarray] = {}
         for predictor in self.predictors:
             logger.info("predictor_fit_start", predictor=predictor.name.value, phase="validation")
             started = time.monotonic()
@@ -74,12 +75,30 @@ class WeightedEnsemble:
                     seconds=round(time.monotonic() - started, 2),
                 )
                 val_probs = np.clip(val_probs, 1e-6, 1 - 1e-6)
+                val_probs_by_predictor[predictor.name] = val_probs
                 losses[predictor.name] = log_loss(val_frame["home_win"].astype(int), val_probs)
             else:
                 losses[predictor.name] = 1.0  # no validation data: treat as neutral
 
-        self.validation_log_loss = losses
         self.weights = _weights_from_losses(losses)
+
+        # The ensemble's own blended validation log loss — distinct from any
+        # individual predictor's — is what the MLflow registry (see
+        # packages.models.registry) compares a freshly trained model against
+        # the current champion on, so it's stored under PredictorName.ENSEMBLE
+        # in the same dict rather than a separate field.
+        if val_probs_by_predictor:
+            ensemble_val_probs = np.zeros(len(val_frame))
+            for name, val_probs in val_probs_by_predictor.items():
+                ensemble_val_probs += self.weights[name] * val_probs
+            ensemble_val_probs = np.clip(ensemble_val_probs, 1e-6, 1 - 1e-6)
+            losses[PredictorName.ENSEMBLE] = log_loss(
+                val_frame["home_win"].astype(int), ensemble_val_probs
+            )
+        else:
+            losses[PredictorName.ENSEMBLE] = 1.0
+
+        self.validation_log_loss = losses
 
         # Refit every model on the FULL frame for serving — the train/val
         # split above is only used to score blend weights, not to starve

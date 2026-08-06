@@ -38,11 +38,20 @@ services:
     command: >
       bash -c "pip install --no-cache-dir mlflow==2.17.0 &&
       mlflow server --host 0.0.0.0 --port 5000
-      --backend-store-uri /mlruns --default-artifact-root /mlruns"
+      --backend-store-uri /mlruns --artifacts-destination /mlruns --serve-artifacts"
     ports:
       - "5000:5000"
     volumes:
       - mlruns_data:/mlruns
+    # --serve-artifacts (proxy artifact reads/writes through the tracking
+    # server's HTTP API) instead of --default-artifact-root (which tells
+    # clients to resolve /mlruns as a path on their OWN filesystem). The
+    # worker/api/beat containers don't share a volume with this container, so
+    # the old setting meant every remote client either silently wrote
+    # artifacts nowhere useful (as root, pre-hardening) or hit a permission
+    # error trying to mkdir a path that doesn't exist in its own container
+    # (as appuser, post-hardening) — either way, never actually reaching this
+    # container's real artifact store.
 
   api:
     build:

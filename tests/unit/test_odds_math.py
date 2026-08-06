@@ -2,6 +2,7 @@ import pytest
 
 from packages.evaluation.odds_math import (
     american_to_decimal,
+    decimal_to_american,
     decimal_to_implied_probability,
     edge,
     expected_value,
@@ -58,3 +59,15 @@ def test_kelly_fraction_positive_for_positive_edge():
 
 def test_edge_is_difference_of_probabilities():
     assert edge(0.55, 0.50) == pytest.approx(0.05)
+
+
+def test_decimal_to_american_round_trips_positive():
+    assert decimal_to_american(american_to_decimal(150)) == 150
+
+
+def test_decimal_to_american_round_trips_negative():
+    assert decimal_to_american(american_to_decimal(-150)) == -150
+
+
+def test_decimal_to_american_even_money():
+    assert decimal_to_american(2.0) == 100

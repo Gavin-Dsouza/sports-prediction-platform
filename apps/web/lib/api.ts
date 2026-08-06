@@ -25,11 +25,35 @@ export interface GamePrediction {
   model_version: string | null;
 }
 
+export interface FeatureReason {
+  feature: string;
+  contribution: number | null;
+  importance: number | null;
+}
+
+export interface SimilarGame {
+  game_id: string;
+  similarity: number;
+  home_team: string;
+  away_team: string;
+  home_score: number | null;
+  away_score: number | null;
+}
+
+export interface PredictionExplanation {
+  top_reasons: FeatureReason[];
+  also_considered: FeatureReason[];
+  shap_model_weight: number;
+  similar_games: SimilarGame[];
+}
+
 export interface BetRecommendation {
   id: string;
-  game_id: string;
+  game: Game;
   market: string;
   selection: string;
+  price_decimal: number | null;
+  price_american: number | null;
   predicted_probability: number;
   market_implied_probability: number;
   edge: number;
@@ -39,6 +63,15 @@ export interface BetRecommendation {
   confidence_score: number;
   rank: number | null;
   generated_at: string;
+  explanation: PredictionExplanation | null;
+}
+
+export interface CalibrationBucket {
+  bucket_lo: number;
+  bucket_hi: number;
+  mean_predicted: number;
+  actual_win_rate: number;
+  num_predictions: number;
 }
 
 export interface BacktestResult {
@@ -51,7 +84,7 @@ export interface BacktestResult {
   max_drawdown: number | null;
   sharpe_ratio: number | null;
   max_losing_streak: number | null;
-  calibration_curve: { buckets: Array<Record<string, number>> };
+  calibration_curve: { buckets: CalibrationBucket[] };
 }
 
 export interface BacktestRun {
@@ -64,6 +97,42 @@ export interface BacktestRun {
   notes: string | null;
   created_at: string;
   results: BacktestResult[];
+}
+
+export interface OddsPoint {
+  captured_at: string;
+  selection: string;
+  price_american: number;
+  implied_probability: number | null;
+}
+
+export interface Injury {
+  id: string;
+  player_name: string;
+  team_abbreviation: string | null;
+  status: string;
+  description: string | null;
+  report_date: string;
+}
+
+export interface ParlayLeg {
+  game: Game;
+  selection: string;
+  price_american: number | null;
+  predicted_probability: number;
+}
+
+export type ParlayCategory = "best_ev" | "low_variance" | "high_payout";
+
+export interface Parlay {
+  id: string;
+  num_legs: number;
+  category: ParlayCategory;
+  combined_probability: number;
+  combined_decimal_odds: number;
+  combined_ev: number;
+  generated_at: string;
+  legs: ParlayLeg[];
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -81,4 +150,7 @@ export const api = {
   recommendedBets: (on?: string) =>
     fetchJson<BetRecommendation[]>(`/bets/recommended${on ? `?on=${on}` : ""}`),
   backtests: () => fetchJson<BacktestRun[]>("/backtests"),
+  lineMovement: (gameId: string) => fetchJson<OddsPoint[]>(`/games/${gameId}/line-movement`),
+  recentInjuries: (days = 7) => fetchJson<Injury[]>(`/injuries/recent?days=${days}`),
+  parlays: (on?: string) => fetchJson<Parlay[]>(`/parlays${on ? `?on=${on}` : ""}`),
 };

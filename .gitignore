@@ -37,6 +37,7 @@ apps/web/.next/
 apps/web/out/
 apps/web/.env*.local
 !apps/web/.env.example
+*.tsbuildinfo
 
 # IDE / OS
 .vscode/

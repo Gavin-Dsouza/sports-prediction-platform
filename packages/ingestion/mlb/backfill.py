@@ -76,6 +76,8 @@ def backfill_date_range(
             games_in_range=len(games_payload),
         )
 
+        from uuid import UUID
+
         from sqlalchemy import select
 
         from packages.core.db_models import Team
@@ -83,7 +85,7 @@ def backfill_date_range(
         db = SessionLocal()
         try:
             team_rows = db.execute(select(Team.external_id, Team.id)).all()
-            team_ids = dict(team_rows)
+            team_ids: dict[str, UUID] = dict(row.tuple() for row in team_rows)
 
             for i, game_payload in enumerate(games_payload, start=1):
                 try:

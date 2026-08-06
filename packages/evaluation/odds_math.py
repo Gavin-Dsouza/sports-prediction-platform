@@ -10,6 +10,20 @@ def american_to_decimal(american_price: int) -> float:
     return 1 + 100 / abs(american_price)
 
 
+def decimal_to_american(decimal_odds: float) -> int:
+    """Inverse of `american_to_decimal` — used to display a price back in the
+    format US bettors actually read (+150 / -110), since that's what we
+    receive from the odds provider but store/compute in decimal form
+    internally (decimal is the form that's actually convenient for EV/Kelly
+    math — no sign-based branching).
+    """
+    if decimal_odds <= 1:
+        raise ValueError("Decimal odds must be > 1.0")
+    if decimal_odds >= 2.0:
+        return round((decimal_odds - 1) * 100)
+    return round(-100 / (decimal_odds - 1))
+
+
 def decimal_to_implied_probability(decimal_odds: float) -> float:
     if decimal_odds <= 1:
         raise ValueError("Decimal odds must be > 1.0")

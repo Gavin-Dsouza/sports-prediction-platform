@@ -42,3 +42,15 @@ class XGBoostPredictor:
     def feature_importance(self) -> dict[str, float] | None:
         importances = self._model.feature_importances_
         return dict(zip(self._feature_columns, importances.tolist(), strict=True))
+
+    @property
+    def model(self) -> xgb.XGBClassifier:
+        """Exposed for `packages.evaluation.explainability` (SHAP needs the
+        raw fitted estimator) — kept as an explicit accessor rather than
+        having that module reach into a private attribute.
+        """
+        return self._model
+
+    @property
+    def feature_columns(self) -> list[str]:
+        return self._feature_columns

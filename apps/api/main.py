@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.api.routers import backtests, bets, games, predictions
+from apps.api.routers import backtests, bets, games, injuries, parlays, predictions
 from packages.core.config import get_settings
 from packages.core.logging import configure_logging
 
@@ -28,6 +28,8 @@ app.include_router(games.router)
 app.include_router(predictions.router)
 app.include_router(bets.router)
 app.include_router(backtests.router)
+app.include_router(injuries.router)
+app.include_router(parlays.router)
 
 
 @app.get("/health", tags=["health"])

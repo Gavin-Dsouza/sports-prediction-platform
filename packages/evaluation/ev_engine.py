@@ -21,12 +21,13 @@ from packages.core.db_models import BetRecommendation, Game, OddsSnapshot
 from packages.core.enums import Market, Selection
 from packages.core.logging import get_logger
 from packages.evaluation.odds_math import (
-    edge as compute_edge,
-)
-from packages.evaluation.odds_math import (
+    decimal_to_american,
     expected_value,
     kelly_fraction,
     remove_vig_two_way,
+)
+from packages.evaluation.odds_math import (
+    edge as compute_edge,
 )
 from packages.models.ensemble import WeightedEnsemble
 
@@ -106,6 +107,23 @@ def build_recommendations(
             (Selection.HOME, predicted_home_prob, quote.home_decimal_odds, quote.home_implied_fair),
             (Selection.AWAY, predicted_away_prob, quote.away_decimal_odds, quote.away_implied_fair),
         ):
+            # A malformed quote (decimal_odds <= 1.0 — a provider glitch,
+            # not something we control) makes decimal_to_american raise.
+            # One bad quote skipping its recommendation is fine; one bad
+            # quote aborting every other game's recommendations for the day
+            # is not, so this is scoped to just this selection rather than
+            # left to propagate out of build_recommendations entirely.
+            try:
+                price_american = decimal_to_american(decimal_odds)
+            except ValueError:
+                logger.warning(
+                    "skipping_malformed_odds_quote",
+                    game_id=str(game.id),
+                    selection=selection.value,
+                    decimal_odds=decimal_odds,
+                )
+                continue
+
             bet_edge = compute_edge(predicted_prob, fair_implied)
             ev = expected_value(predicted_prob, decimal_odds)
             kelly = kelly_fraction(predicted_prob, decimal_odds)
@@ -116,6 +134,8 @@ def build_recommendations(
                     market=Market.MONEYLINE,
                     selection=selection,
                     odds_snapshot_captured_at=quote.captured_at,
+                    price_decimal=decimal_odds,
+                    price_american=price_american,
                     predicted_probability=predicted_prob,
                     market_implied_probability=fair_implied,
                     edge=bet_edge,
