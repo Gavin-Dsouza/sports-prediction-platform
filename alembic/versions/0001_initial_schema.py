@@ -12,23 +12,47 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 
 revision: str = "0001"
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-SPORT_ENUM = sa.Enum("MLB", name="sport")
-GAME_STATUS_ENUM = sa.Enum(
-    "scheduled", "live", "final", "postponed", "cancelled", name="game_status"
+# `create_type=False` on every one of these: each type is referenced by
+# columns on *multiple* tables below (e.g. "sport" appears on teams, players,
+# games, odds_snapshots, backtest_runs). Without this, SQLAlchemy tries to
+# auto-CREATE TYPE the first time each column is created via op.create_table,
+# which collides with the explicit `.create()` calls in upgrade() below (and
+# would collide with itself across tables even without those). We create each
+# type exactly once, explicitly, and tell column definitions not to repeat it.
+#
+# NOTE: this must be the PostgreSQL-dialect `ENUM` (imported as `PGEnum`
+# above), not the generic `sa.Enum` — `create_type=False` does not reliably
+# propagate through the generic Enum's dialect-impl adaptation on every
+# SQLAlchemy version, and silently re-attempts CREATE TYPE anyway.
+SPORT_ENUM = PGEnum("MLB", name="sport", create_type=False)
+GAME_STATUS_ENUM = PGEnum(
+    "scheduled", "live", "final", "postponed", "cancelled", name="game_status", create_type=False
 )
-MARKET_ENUM = sa.Enum("moneyline", "run_line", "total", name="market")
-SPORTSBOOK_ENUM = sa.Enum(
-    "the_odds_api_consensus", "draftkings", "fanduel", "fliff", name="sportsbook"
+MARKET_ENUM = PGEnum("moneyline", "run_line", "total", name="market", create_type=False)
+SPORTSBOOK_ENUM = PGEnum(
+    "the_odds_api_consensus",
+    "draftkings",
+    "fanduel",
+    "fliff",
+    name="sportsbook",
+    create_type=False,
 )
-SELECTION_ENUM = sa.Enum("home", "away", "over", "under", name="selection")
-PREDICTOR_NAME_ENUM = sa.Enum(
-    "elo", "poisson", "logistic_regression", "xgboost", "ensemble", name="predictor_name"
+SELECTION_ENUM = PGEnum("home", "away", "over", "under", name="selection", create_type=False)
+PREDICTOR_NAME_ENUM = PGEnum(
+    "elo",
+    "poisson",
+    "logistic_regression",
+    "xgboost",
+    "ensemble",
+    name="predictor_name",
+    create_type=False,
 )
 
 

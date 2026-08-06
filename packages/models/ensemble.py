@@ -6,6 +6,8 @@ adding a new Predictor to `_DEFAULT_PREDICTORS` is the entire integration
 cost, weighting is fully automatic.
 """
 
+import time
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
@@ -45,11 +47,32 @@ class WeightedEnsemble:
         train_frame = frame.iloc[:split_idx]
         val_frame = frame.iloc[split_idx:]
 
+        # Per-model start/done logging: `ensemble.fit()` used to be a single
+        # silent black box until everything finished, which makes it
+        # impossible to tell which of the 4 models (or which of their two fit
+        # passes below) is slow or stuck versus just not-yet-started. This
+        # showed up directly as a real debugging problem — worth the two log
+        # lines per model.
         losses: dict[PredictorName, float] = {}
         for predictor in self.predictors:
+            logger.info("predictor_fit_start", predictor=predictor.name.value, phase="validation")
+            started = time.monotonic()
             predictor.fit(train_frame)
+            logger.info(
+                "predictor_fit_done",
+                predictor=predictor.name.value,
+                phase="validation",
+                seconds=round(time.monotonic() - started, 2),
+            )
             if len(val_frame) > 0:
+                logger.info("predictor_predict_start", predictor=predictor.name.value)
+                started = time.monotonic()
                 val_probs = predictor.predict_proba(val_frame)
+                logger.info(
+                    "predictor_predict_done",
+                    predictor=predictor.name.value,
+                    seconds=round(time.monotonic() - started, 2),
+                )
                 val_probs = np.clip(val_probs, 1e-6, 1 - 1e-6)
                 losses[predictor.name] = log_loss(val_frame["home_win"].astype(int), val_probs)
             else:
@@ -62,7 +85,15 @@ class WeightedEnsemble:
         # split above is only used to score blend weights, not to starve
         # models of the most recent data at inference time.
         for predictor in self.predictors:
+            logger.info("predictor_fit_start", predictor=predictor.name.value, phase="full")
+            started = time.monotonic()
             predictor.fit(frame)
+            logger.info(
+                "predictor_fit_done",
+                predictor=predictor.name.value,
+                phase="full",
+                seconds=round(time.monotonic() - started, 2),
+            )
 
         logger.info(
             "ensemble_fit_complete",

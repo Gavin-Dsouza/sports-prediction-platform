@@ -9,6 +9,25 @@ from sqlalchemy.orm import Session
 from packages.core.db_models import FeatureVector, Game
 from packages.core.enums import GameStatus, Sport
 from packages.features.schema import FEATURE_SET_VERSION
+from packages.models.base import numeric_feature_columns
+
+
+def _coerce_numeric_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """A feature that's `None` for every row (e.g. `market_home_implied_prob`
+    before any odds have been ingested for this window) has no numeric value
+    anywhere in the column for pandas to infer a dtype from, so it lands as
+    `object` rather than `float64` — `None` instead of `NaN`. Every
+    `Predictor` implementation ultimately expects a numeric matrix; some
+    (XGBoost, scikit-learn) tolerate `object` columns inconsistently rather
+    than failing loudly, and statsmodels rejects them outright. We fix this
+    once here, centrally, rather than trusting every model implementation to
+    defend against it independently.
+    """
+    if frame.empty:
+        return frame
+    feature_cols = numeric_feature_columns(frame)
+    frame[feature_cols] = frame[feature_cols].apply(pd.to_numeric, errors="coerce")
+    return frame
 
 
 def build_training_frame(
@@ -52,7 +71,8 @@ def build_training_frame(
     frame = pd.DataFrame(rows)
     # feature_set_version/game_id (string) don't belong in the numeric matrix;
     # game_id stays as an identity column, feature_set_version is dropped.
-    return frame.drop(columns=["feature_set_version"], errors="ignore")
+    frame = frame.drop(columns=["feature_set_version"], errors="ignore")
+    return _coerce_numeric_features(frame)
 
 
 def build_inference_frame(session: Session, game_ids: list[str]) -> pd.DataFrame:
@@ -83,4 +103,5 @@ def build_inference_frame(session: Session, game_ids: list[str]) -> pd.DataFrame
         )
         rows.append(row)
     frame = pd.DataFrame(rows)
-    return frame.drop(columns=["feature_set_version"], errors="ignore")
+    frame = frame.drop(columns=["feature_set_version"], errors="ignore")
+    return _coerce_numeric_features(frame)

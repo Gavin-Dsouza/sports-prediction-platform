@@ -15,7 +15,7 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from packages.core.db import session_scope
+from packages.core.db import SessionLocal, session_scope
 from packages.core.logging import get_logger
 from packages.ingestion.mlb.client import MlbStatsApiClient
 from packages.ingestion.mlb.etl import (
@@ -49,6 +49,15 @@ def backfill_date_range(
 ) -> dict[str, int]:
     """Ingest every game (schedule + boxscore + optional play-by-play) and IL
     transaction between `start_date` and `end_date`, inclusive.
+
+    Commits once per game (not once for the whole range): a multi-month
+    backfill can run for tens of minutes making hundreds of external HTTP
+    calls, and wrapping the entire thing in a single transaction means a
+    single bad game, a network blip, or a Ctrl+C throws away *everything*
+    ingested so far, not just the game in flight. Committing per-game bounds
+    the blast radius of any interruption to "at most the one game currently
+    being processed" — re-running the same range afterward is still a no-op
+    for everything already committed, since every upsert is idempotent.
     """
     stats = {"games": 0, "player_game_stats": 0, "game_events": 0, "injuries": 0}
 
@@ -60,34 +69,66 @@ def backfill_date_range(
 
         games_payload = client.get_schedule(start_date, end_date)
         transactions_payload = client.get_transactions(start_date, end_date)
+        logger.info(
+            "backfill_schedule_fetched",
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+            games_in_range=len(games_payload),
+        )
 
-        with session_scope() as db:
-            from sqlalchemy import select
+        from sqlalchemy import select
 
-            from packages.core.db_models import Team
+        from packages.core.db_models import Team
 
+        db = SessionLocal()
+        try:
             team_rows = db.execute(select(Team.external_id, Team.id)).all()
             team_ids = {external_id: team_id for external_id, team_id in team_rows}
 
-            for game_payload in games_payload:
-                game_id = upsert_game(db, game_payload, team_ids=team_ids)
-                if game_id is None:
-                    continue
-                stats["games"] += 1
+            for i, game_payload in enumerate(games_payload, start=1):
+                try:
+                    game_id = upsert_game(db, game_payload, team_ids=team_ids)
+                    if game_id is not None:
+                        stats["games"] += 1
+                        game_pk = int(game_payload["gamePk"])
+                        status = game_payload.get("status", {}).get("detailedState", "")
+                        if status in ("Final", "Game Over"):
+                            boxscore = client.get_boxscore(game_pk)
+                            stats["player_game_stats"] += upsert_boxscore_stats(
+                                db, game_id, boxscore
+                            )
+                            if include_play_by_play:
+                                pbp = client.get_play_by_play(game_pk)
+                                stats["game_events"] += upsert_game_events(db, game_id, pbp)
+                    db.commit()
+                except Exception:
+                    # Roll back only this game's partial writes — everything
+                    # committed for prior games in this loop is unaffected —
+                    # log it, and keep going rather than aborting the whole run.
+                    db.rollback()
+                    logger.exception(
+                        "backfill_game_failed", game_pk=game_payload.get("gamePk")
+                    )
 
-                game_pk = int(game_payload["gamePk"])
-                status = game_payload.get("status", {}).get("detailedState", "")
-                if status not in ("Final", "Game Over"):
-                    continue  # box score / play-by-play only meaningful for completed games
-
-                boxscore = client.get_boxscore(game_pk)
-                stats["player_game_stats"] += upsert_boxscore_stats(db, game_id, boxscore)
-
-                if include_play_by_play:
-                    pbp = client.get_play_by_play(game_pk)
-                    stats["game_events"] += upsert_game_events(db, game_id, pbp)
+                # This loop makes 1-2 HTTP calls per completed game with no
+                # other feedback for several minutes on a multi-month range —
+                # a periodic heartbeat is the difference between "it's working"
+                # and "did this hang," especially the first time someone runs it.
+                if i % 25 == 0 or i == len(games_payload):
+                    logger.info(
+                        "backfill_progress",
+                        processed=i,
+                        total=len(games_payload),
+                        games_ingested=stats["games"],
+                    )
 
             stats["injuries"] = upsert_injuries_from_transactions(db, transactions_payload)
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
+        finally:
+            db.close()
 
     logger.info("backfill_complete", start=start_date.isoformat(), end=end_date.isoformat(), **stats)
     return stats

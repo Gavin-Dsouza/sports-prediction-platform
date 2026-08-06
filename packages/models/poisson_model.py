@@ -16,6 +16,17 @@ from packages.core.enums import PredictorName
 from packages.models.base import numeric_feature_columns
 
 
+def _numeric_matrix(frame: pd.DataFrame, feature_columns: list[str]) -> pd.DataFrame:
+    """`fillna(0.0)` alone isn't enough: a feature that's `None` for every row
+    in the frame (e.g. `market_home_implied_prob` before any odds have been
+    ingested) stays pandas dtype `object` even after filling, since there's no
+    other value in the column to infer a numeric dtype from. statsmodels (unlike
+    sklearn/XGBoost) refuses to fit on an object-dtype matrix at all, so we
+    force the cast explicitly rather than relying on fillna's inference.
+    """
+    return frame[feature_columns].fillna(0.0).astype(float)
+
+
 class PoissonPredictor:
     name = PredictorName.POISSON
 
@@ -25,25 +36,48 @@ class PoissonPredictor:
         self._feature_columns: list[str] = []
 
     def fit(self, frame: pd.DataFrame) -> None:
-        self._feature_columns = numeric_feature_columns(frame)
-        X = sm.add_constant(frame[self._feature_columns].fillna(0.0))
+        candidate_columns = numeric_feature_columns(frame)
+        numeric_frame = _numeric_matrix(frame, candidate_columns)
+
+        # A zero-variance column (e.g. every market_* feature is a constant 0
+        # until odds have actually been ingested) makes the design matrix rank
+        # deficient. statsmodels' IRLS solve doesn't fail cleanly on that on
+        # every BLAS backend — on some (notably Apple's Accelerate, used by
+        # numpy on Apple Silicon by default) it can become pathologically slow
+        # or appear to hang entirely rather than erroring. Drop constant
+        # columns before fitting; predict_proba reuses this same reduced
+        # column list below, so there's no train/inference mismatch.
+        self._feature_columns = [
+            c for c in candidate_columns if numeric_frame[c].std() > 0
+        ]
+        X = sm.add_constant(numeric_frame[self._feature_columns])
 
         self._home_results = sm.GLM(
             frame["home_score"].astype(float), X, family=sm.families.Poisson()
-        ).fit()
+        ).fit(maxiter=50)
         self._away_results = sm.GLM(
             frame["away_score"].astype(float), X, family=sm.families.Poisson()
-        ).fit()
+        ).fit(maxiter=50)
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
         if self._home_results is None or self._away_results is None:
             raise RuntimeError("PoissonPredictor.predict_proba called before fit()")
 
         X = sm.add_constant(
-            frame[self._feature_columns].fillna(0.0), has_constant="add"
+            _numeric_matrix(frame, self._feature_columns), has_constant="add"
         )
         mu_home = self._home_results.predict(X)
         mu_away = self._away_results.predict(X)
+
+        # With few training rows relative to feature count, GLM coefficients
+        # can be poorly conditioned enough that exp(linear predictor) blows up
+        # on out-of-sample rows -- e.g. a predicted mean of 1e50 "runs". Aside
+        # from being nonsense (MLB teams score 0-20ish runs a game), passing
+        # values that extreme into Skellam's PMF/CDF below evaluates modified
+        # Bessel functions at huge arguments, which can hang rather than
+        # cleanly overflow to inf. Clamp to a generous-but-sane range first.
+        mu_home = np.clip(mu_home, 0.05, 30.0)
+        mu_away = np.clip(mu_away, 0.05, 30.0)
 
         # P(home_runs > away_runs) via Skellam(mu_home, mu_away). Skellam is
         # defined on the difference D = home - away; P(D > 0) = 1 - CDF(0).

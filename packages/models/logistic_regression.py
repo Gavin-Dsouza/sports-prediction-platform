@@ -22,7 +22,16 @@ class LogisticRegressionPredictor:
     def __init__(self) -> None:
         self._pipeline = Pipeline(
             steps=[
-                ("impute", SimpleImputer(strategy="median")),
+                # `keep_empty_features=True`: a feature that's `None` for every
+                # row (e.g. market_* before any odds are ingested) has nothing
+                # to compute a median from, and SimpleImputer's default is to
+                # silently *drop* that column from its output rather than fail.
+                # That desyncs `clf.coef_` from `self._feature_columns` below
+                # (fewer coefficients than named features) and breaks
+                # feature_importance(). Keeping the column (filled with 0)
+                # preserves a 1:1 mapping regardless of which features happen
+                # to have no data yet.
+                ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
                 ("scale", StandardScaler()),
                 ("clf", SkLogisticRegression(max_iter=1000)),
             ]
