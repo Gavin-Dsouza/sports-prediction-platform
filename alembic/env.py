@@ -1,14 +1,14 @@
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from packages.core.config import get_settings
-from packages.core.db import Base
+from alembic import context
 
 # Import every model module here so Base.metadata is fully populated before
 # autogenerate compares it against the live database.
 from packages.core import db_models  # noqa: F401
+from packages.core.config import get_settings
+from packages.core.db import Base
 
 config = context.config
 

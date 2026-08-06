@@ -6,6 +6,7 @@ to a log aggregator later) and a readable colored line in development.
 
 import logging
 import sys
+from typing import cast
 
 import structlog
 
@@ -42,4 +43,7 @@ def configure_logging() -> None:
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
-    return structlog.get_logger(name)
+    # structlog.get_logger's stubs return Any (it's dynamically proxied at
+    # runtime based on configure()'s wrapper_class) — cast to the concrete
+    # type we configure it to in configure_logging() above.
+    return cast(structlog.stdlib.BoundLogger, structlog.get_logger(name))

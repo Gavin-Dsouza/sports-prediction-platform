@@ -9,7 +9,7 @@ expects, and a future migration to a wide typed table (if query performance
 ever demands it) can happen without touching how features are produced.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -30,7 +30,7 @@ _WINDOWS = (7, 15, 30)
 def build_game_features(session: Session, game: Game) -> GameFeatures:
     as_of_date = game.game_date
     as_of_datetime = game.game_datetime or datetime.combine(
-        game.game_date, datetime.min.time(), tzinfo=timezone.utc
+        game.game_date, datetime.min.time(), tzinfo=UTC
     )
 
     runs: dict[str, float] = {}
@@ -106,13 +106,13 @@ def persist_features(session: Session, features: GameFeatures) -> UUID:
             game_id=UUID(features.game_id),
             feature_set_version=features.feature_set_version,
             features=features.model_dump(mode="json"),
-            computed_at=datetime.now(timezone.utc),
+            computed_at=datetime.now(UTC),
         )
         .on_conflict_do_update(
             index_elements=["game_id", "feature_set_version"],
             set_={
                 "features": features.model_dump(mode="json"),
-                "computed_at": datetime.now(timezone.utc),
+                "computed_at": datetime.now(UTC),
             },
         )
         .returning(FeatureVector.id)

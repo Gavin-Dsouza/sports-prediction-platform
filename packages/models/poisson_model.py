@@ -47,9 +47,7 @@ class PoissonPredictor:
         # or appear to hang entirely rather than erroring. Drop constant
         # columns before fitting; predict_proba reuses this same reduced
         # column list below, so there's no train/inference mismatch.
-        self._feature_columns = [
-            c for c in candidate_columns if numeric_frame[c].std() > 0
-        ]
+        self._feature_columns = [c for c in candidate_columns if numeric_frame[c].std() > 0]
         X = sm.add_constant(numeric_frame[self._feature_columns])
 
         self._home_results = sm.GLM(
@@ -63,9 +61,7 @@ class PoissonPredictor:
         if self._home_results is None or self._away_results is None:
             raise RuntimeError("PoissonPredictor.predict_proba called before fit()")
 
-        X = sm.add_constant(
-            _numeric_matrix(frame, self._feature_columns), has_constant="add"
-        )
+        X = sm.add_constant(_numeric_matrix(frame, self._feature_columns), has_constant="add")
         mu_home = self._home_results.predict(X)
         mu_away = self._away_results.predict(X)
 
@@ -89,12 +85,10 @@ class PoissonPredictor:
         return np.asarray(p_home_gt + p_tie / 2)
 
     def feature_importance(self) -> dict[str, float] | None:
-        if self._home_results is None:
+        if self._home_results is None or self._away_results is None:
             return None
         # Average absolute coefficient magnitude across both GLMs as a rough
         # importance proxy (features aren't standardized, so treat this as
         # directional, not a precise ranking — SHAP in M2 supersedes this).
-        params = (
-            self._home_results.params.abs() + self._away_results.params.abs()
-        ) / 2
+        params = (self._home_results.params.abs() + self._away_results.params.abs()) / 2
         return {name: float(value) for name, value in params.items() if name != "const"}

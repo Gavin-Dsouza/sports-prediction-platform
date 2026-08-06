@@ -45,7 +45,9 @@ def test_max_drawdown_tracks_peak_to_trough():
     outcomes = [
         BetOutcome(predicted_probability=0.6, decimal_odds=2.0, stake=10, won=True),  # +10
         BetOutcome(predicted_probability=0.6, decimal_odds=2.0, stake=10, won=False),  # -10 (cum 0)
-        BetOutcome(predicted_probability=0.6, decimal_odds=2.0, stake=10, won=False),  # -10 (cum -10)
+        BetOutcome(
+            predicted_probability=0.6, decimal_odds=2.0, stake=10, won=False
+        ),  # -10 (cum -10)
     ]
     # peak was 10, trough -10 -> drawdown 20
     assert max_drawdown(outcomes) == pytest.approx(20.0)
@@ -64,4 +66,7 @@ def test_max_losing_streak_counts_consecutive_losses():
 
 
 def test_sharpe_ratio_none_with_fewer_than_two_outcomes():
-    assert sharpe_ratio([BetOutcome(predicted_probability=0.5, decimal_odds=2.0, stake=1, won=True)]) is None
+    assert (
+        sharpe_ratio([BetOutcome(predicted_probability=0.5, decimal_odds=2.0, stake=1, won=True)])
+        is None
+    )

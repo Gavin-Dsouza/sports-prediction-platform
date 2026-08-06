@@ -27,15 +27,20 @@ class EloPredictor:
         return 1 / (1 + 10 ** (-diff / 400))
 
     def fit(self, frame: pd.DataFrame) -> None:
+        # `itertuples()` column types are inferred by pandas-stubs as a huge
+        # dtype union (it can't know from a DataFrame's runtime dtypes alone
+        # that a given column is always str) — explicit str()/float() below
+        # are both what mypy needs and a real guard against a non-string team
+        # id or non-numeric home_win ever silently reaching the ratings dict.
         self.ratings = {}
         for row in frame.itertuples(index=False):
-            home_id = row.home_team_id
-            away_id = row.away_team_id
+            home_id = str(row.home_team_id)
+            away_id = str(row.away_team_id)
             home_rating = self.ratings.get(home_id, DEFAULT_RATING)
             away_rating = self.ratings.get(away_id, DEFAULT_RATING)
 
             expected_home = self._expected_home_win_prob(home_rating, away_rating)
-            actual_home = float(row.home_win)
+            actual_home = float(row.home_win)  # type: ignore[arg-type]
 
             self.ratings[home_id] = home_rating + self.k_factor * (actual_home - expected_home)
             self.ratings[away_id] = away_rating + self.k_factor * (
@@ -45,8 +50,8 @@ class EloPredictor:
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
         probs = [
             self._expected_home_win_prob(
-                self.ratings.get(row.home_team_id, DEFAULT_RATING),
-                self.ratings.get(row.away_team_id, DEFAULT_RATING),
+                self.ratings.get(str(row.home_team_id), DEFAULT_RATING),
+                self.ratings.get(str(row.away_team_id), DEFAULT_RATING),
             )
             for row in frame.itertuples(index=False)
         ]

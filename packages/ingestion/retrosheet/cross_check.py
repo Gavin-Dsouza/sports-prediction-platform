@@ -3,7 +3,6 @@ for the same season, flagging count/score mismatches. Run after a season
 backfill as a data-quality sanity check, not as part of the ingestion path.
 """
 
-from datetime import date
 from typing import NamedTuple
 
 from sqlalchemy import select
@@ -46,16 +45,11 @@ def cross_check_season(session: Session, season: int) -> CrossCheckReport:
         # We don't store Retrosheet's 3-letter codes on `teams`, so this is a
         # best-effort match on date only when team-code mapping isn't available;
         # a tighter join is a follow-up once a team-code crosswalk exists.
-        same_day = [
-            g
-            for (d, _, _), g in retrosheet_by_date_teams.items()
-            if d == game.game_date
-        ]
+        same_day = [g for (d, _, _), g in retrosheet_by_date_teams.items() if d == game.game_date]
         if not same_day:
             continue
         if not any(
-            {g.home_score, g.visiting_score} == {game.home_score, game.away_score}
-            for g in same_day
+            {g.home_score, g.visiting_score} == {game.home_score, game.away_score} for g in same_day
         ):
             mismatches += 1
             logger.warning(

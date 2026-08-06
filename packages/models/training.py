@@ -58,9 +58,7 @@ def train_ensemble(
 
         importance = ensemble.feature_importance()
         if importance:
-            top_features = dict(
-                sorted(importance.items(), key=lambda kv: kv[1], reverse=True)[:20]
-            )
+            top_features = dict(sorted(importance.items(), key=lambda kv: kv[1], reverse=True)[:20])
             mlflow.log_dict(top_features, "top_feature_importance.json")
 
         model_version = run.info.run_id

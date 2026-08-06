@@ -21,7 +21,6 @@ from datetime import date, timedelta
 from uuid import UUID
 
 import numpy as np
-import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -122,15 +121,15 @@ def run_walk_forward_backtest(
 
         for i, row in enumerate(test_frame.itertuples(index=False)):
             predicted_home_prob = float(home_win_probs[i])
-            actual_home_win = int(row.home_win)
+            actual_home_win = int(row.home_win)  # type: ignore[arg-type]
             predicted_probs.append(predicted_home_prob)
             actual_outcomes.append(actual_home_win)
 
-            quote = _historical_moneyline_quote(session, row.game_id)
+            quote = _historical_moneyline_quote(session, str(row.game_id))
             if quote is None:
                 continue  # no market price for this historical game — see module docstring
 
-            for selection, predicted_prob, decimal_odds, fair_implied, won in (
+            for _selection, predicted_prob, decimal_odds, fair_implied, won in (
                 (
                     Selection.HOME,
                     predicted_home_prob,

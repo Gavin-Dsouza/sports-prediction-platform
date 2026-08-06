@@ -3,8 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from packages.core.enums import Market, PredictorName, Selection
 from apps.api.schemas.games import GameOut
+from packages.core.enums import Market, PredictorName, Selection
 
 
 class PredictionOut(BaseModel):

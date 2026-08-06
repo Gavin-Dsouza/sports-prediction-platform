@@ -68,12 +68,19 @@ class OddsApiClient:
         self,
         *,
         regions: str = "us",
-        markets: str = "h2h,spreads,totals",
+        markets: str = "h2h",
         odds_format: str = "american",
     ) -> list[dict[str, Any]]:
         """One entry per upcoming/live MLB game, each with a list of
         bookmakers → markets → outcomes. `h2h` = moneyline, `spreads` = run
         line, `totals` = over/under — matching our `Market` enum.
+
+        Defaults to `h2h` only: The Odds API bills per-market-per-region
+        requested, and `packages.evaluation.ev_engine` only consumes the
+        moneyline market as of M1 (run line/totals need a different model
+        output — see that module's docstring). Requesting spreads/totals we
+        don't act on yet would triple the credit cost of every poll for no
+        benefit; widen this once EV logic for those markets actually exists.
         """
         data = self._get(
             f"/sports/{MLB_SPORT_KEY}/odds",

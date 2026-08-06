@@ -15,7 +15,7 @@ Design notes:
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     Date,
@@ -60,12 +60,12 @@ def _str_enum(enum_cls: type, name: str) -> SAEnum:
 
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
 
@@ -83,9 +83,7 @@ class Team(Base, TimestampMixin):
     venue_external_id: Mapped[str | None] = mapped_column(String(64))
     venue_name: Mapped[str | None] = mapped_column(String(128))
 
-    __table_args__ = (
-        UniqueConstraint("sport", "external_id", name="uq_teams_sport_external_id"),
-    )
+    __table_args__ = (UniqueConstraint("sport", "external_id", name="uq_teams_sport_external_id"),)
 
 
 class Player(Base, TimestampMixin):
@@ -124,12 +122,8 @@ class Game(Base, TimestampMixin):
     home_score: Mapped[int | None] = mapped_column()
     away_score: Mapped[int | None] = mapped_column()
 
-    home_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("players.id")
-    )
-    away_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("players.id")
-    )
+    home_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("players.id"))
+    away_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("players.id"))
 
     venue_external_id: Mapped[str | None] = mapped_column(String(64))
     venue_name: Mapped[str | None] = mapped_column(String(128))
@@ -158,7 +152,7 @@ class GameEvent(Base):
     pitcher_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("players.id"))
     raw_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     __table_args__ = (
@@ -221,9 +215,7 @@ class OddsSnapshot(Base):
     # Composite PK (id, captured_at): `id` gives each quote a stable identity,
     # `captured_at` must be part of every unique/primary key on a TimescaleDB
     # hypertable since that's the partitioning ("time") column.
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, primary_key=True
     )
@@ -233,18 +225,14 @@ class OddsSnapshot(Base):
         _str_enum(Sportsbook, "sportsbook"), nullable=False
     )
     market: Mapped[Market] = mapped_column(_str_enum(Market, "market"), nullable=False)
-    selection: Mapped[Selection] = mapped_column(
-        _str_enum(Selection, "selection"), nullable=False
-    )
+    selection: Mapped[Selection] = mapped_column(_str_enum(Selection, "selection"), nullable=False)
     line: Mapped[float | None] = mapped_column(Numeric(6, 2))
     price_american: Mapped[int] = mapped_column(nullable=False)
     price_decimal: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False)
     implied_probability: Mapped[float | None] = mapped_column(Numeric(6, 5))
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
 
-    __table_args__ = (
-        Index("ix_odds_snapshots_game_market", "game_id", "market", "captured_at"),
-    )
+    __table_args__ = (Index("ix_odds_snapshots_game_market", "game_id", "market", "captured_at"),)
 
 
 class FeatureVector(Base):
@@ -255,13 +243,11 @@ class FeatureVector(Base):
     feature_set_version: Mapped[str] = mapped_column(String(32), nullable=False)
     features: Mapped[dict] = mapped_column(JSONB, nullable=False)
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     __table_args__ = (
-        UniqueConstraint(
-            "game_id", "feature_set_version", name="uq_feature_vectors_game_version"
-        ),
+        UniqueConstraint("game_id", "feature_set_version", name="uq_feature_vectors_game_version"),
     )
 
 
@@ -271,16 +257,14 @@ class Prediction(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("games.id"), nullable=False)
     market: Mapped[Market] = mapped_column(_str_enum(Market, "market"), nullable=False)
-    selection: Mapped[Selection] = mapped_column(
-        _str_enum(Selection, "selection"), nullable=False
-    )
+    selection: Mapped[Selection] = mapped_column(_str_enum(Selection, "selection"), nullable=False)
     predictor_name: Mapped[PredictorName] = mapped_column(
         _str_enum(PredictorName, "predictor_name"), nullable=False
     )
     probability: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
     model_version: Mapped[str] = mapped_column(String(64), nullable=False)
     predicted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     __table_args__ = (
@@ -299,9 +283,7 @@ class BetRecommendation(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("games.id"), nullable=False)
     market: Mapped[Market] = mapped_column(_str_enum(Market, "market"), nullable=False)
-    selection: Mapped[Selection] = mapped_column(
-        _str_enum(Selection, "selection"), nullable=False
-    )
+    selection: Mapped[Selection] = mapped_column(_str_enum(Selection, "selection"), nullable=False)
     odds_snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     predicted_probability: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
     market_implied_probability: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
@@ -312,12 +294,10 @@ class BetRecommendation(Base):
     confidence_score: Mapped[float] = mapped_column(Numeric(6, 5), nullable=False)
     rank: Mapped[int | None] = mapped_column()
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
-    __table_args__ = (
-        Index("ix_bets_recommended_generated_at_rank", "generated_at", "rank"),
-    )
+    __table_args__ = (Index("ix_bets_recommended_generated_at_rank", "generated_at", "rank"),)
 
 
 class BacktestRun(Base):
@@ -333,7 +313,7 @@ class BacktestRun(Base):
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     results: Mapped[list["BacktestResult"]] = relationship(back_populates="backtest_run")
@@ -357,7 +337,7 @@ class BacktestResult(Base):
     max_losing_streak: Mapped[int | None] = mapped_column()
     calibration_curve: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
 
     backtest_run: Mapped["BacktestRun"] = relationship(back_populates="results")

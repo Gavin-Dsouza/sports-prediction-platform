@@ -83,7 +83,7 @@ def backfill_date_range(
         db = SessionLocal()
         try:
             team_rows = db.execute(select(Team.external_id, Team.id)).all()
-            team_ids = {external_id: team_id for external_id, team_id in team_rows}
+            team_ids = dict(team_rows)
 
             for i, game_payload in enumerate(games_payload, start=1):
                 try:
@@ -106,9 +106,7 @@ def backfill_date_range(
                     # committed for prior games in this loop is unaffected —
                     # log it, and keep going rather than aborting the whole run.
                     db.rollback()
-                    logger.exception(
-                        "backfill_game_failed", game_pk=game_payload.get("gamePk")
-                    )
+                    logger.exception("backfill_game_failed", game_pk=game_payload.get("gamePk"))
 
                 # This loop makes 1-2 HTTP calls per completed game with no
                 # other feedback for several minutes on a multi-month range —
@@ -130,7 +128,9 @@ def backfill_date_range(
         finally:
             db.close()
 
-    logger.info("backfill_complete", start=start_date.isoformat(), end=end_date.isoformat(), **stats)
+    logger.info(
+        "backfill_complete", start=start_date.isoformat(), end=end_date.isoformat(), **stats
+    )
     return stats
 
 

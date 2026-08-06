@@ -10,7 +10,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -185,17 +185,13 @@ def upsert_game(
                 session, external_id=str(probable["id"]), full_name=probable.get("fullName", "")
             )
             session.execute(
-                Game.__table__.update()
-                .where(Game.id == game_id)
-                .values(**{pitcher_field: pitcher_id})
+                update(Game).where(Game.id == game_id).values(**{pitcher_field: pitcher_id})
             )
 
     return game_id
 
 
-def upsert_boxscore_stats(
-    session: Session, game_id: UUID, boxscore_payload: dict[str, Any]
-) -> int:
+def upsert_boxscore_stats(session: Session, game_id: UUID, boxscore_payload: dict[str, Any]) -> int:
     """Upsert per-player batting/pitching lines for one game. Returns count of
     player-game rows written.
     """
@@ -218,7 +214,7 @@ def upsert_boxscore_stats(
             str(pid) for pid in side.get("pitchers", [])[:1]
         }
 
-        for player_key, player_data in players.items():
+        for _player_key, player_data in players.items():
             person = player_data.get("person", {})
             external_id = str(person.get("id", ""))
             if not external_id:
@@ -267,9 +263,7 @@ def upsert_boxscore_stats(
                         "rbi": batting.get("rbi"),
                         "walks": batting.get("baseOnBalls"),
                         "strikeouts": batting.get("strikeOuts"),
-                        "innings_pitched": _parse_innings_pitched(
-                            pitching.get("inningsPitched")
-                        ),
+                        "innings_pitched": _parse_innings_pitched(pitching.get("inningsPitched")),
                         "earned_runs": pitching.get("earnedRuns"),
                         "strikeouts_pitched": pitching.get("strikeOuts"),
                         "walks_allowed": pitching.get("baseOnBalls"),
@@ -358,9 +352,7 @@ def upsert_injuries_from_transactions(
         team = None
         if team_external_id:
             team = session.execute(
-                select(Team).where(
-                    Team.sport == Sport.MLB, Team.external_id == team_external_id
-                )
+                select(Team).where(Team.sport == Sport.MLB, Team.external_id == team_external_id)
             ).scalar_one_or_none()
 
         report_date = date.fromisoformat(txn["date"]) if txn.get("date") else date.today()

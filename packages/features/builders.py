@@ -220,8 +220,10 @@ def market_snapshot_features(
     return {
         "market_home_implied_prob": market_home_implied_prob,
         "market_away_implied_prob": (
-            float(latest_away_ml.implied_probability) if latest_away_ml else None
+            float(latest_away_ml.implied_probability or 0) if latest_away_ml else None
         ),
-        "market_total_line": float(latest_total.line) if latest_total and latest_total.line else None,
+        "market_total_line": (
+            float(latest_total.line) if latest_total and latest_total.line is not None else None
+        ),
         "line_movement_home_prob_delta": line_movement,
     }

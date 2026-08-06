@@ -55,7 +55,12 @@ exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4"]
-ignore = ["E501"]
+# B008: flags function calls in argument defaults as a footgun (mutable
+# default evaluated once) — correct in general, but FastAPI's dependency
+# injection (Depends(...), Query(...)) *requires* this exact pattern and is
+# the officially documented way to use it. A known, accepted false positive
+# for any FastAPI codebase, not suppressed technical debt.
+ignore = ["E501", "B008"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["apps", "packages"]

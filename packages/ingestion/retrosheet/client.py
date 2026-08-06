@@ -80,10 +80,13 @@ def fetch_season_game_log(season: int) -> list[RetrosheetGame]:
             game_date=date(
                 int(str(row.date)[:4]), int(str(row.date)[4:6]), int(str(row.date)[6:8])
             ),
-            visiting_team=row.visiting_team,
-            home_team=row.home_team,
-            visiting_score=int(row.visiting_score),
-            home_score=int(row.home_score),
+            visiting_team=str(row.visiting_team),
+            home_team=str(row.home_team),
+            # int() directly (not via str()!) — these columns are numeric
+            # (int64 or float64 if pandas upcast for any reason), and
+            # int("12.0") raises ValueError where int(12.0) doesn't.
+            visiting_score=int(row.visiting_score),  # type: ignore[arg-type]
+            home_score=int(row.home_score),  # type: ignore[arg-type]
         )
         for row in frame.itertuples(index=False)
     ]

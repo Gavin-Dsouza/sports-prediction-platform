@@ -83,9 +83,7 @@ def build_inference_frame(session: Session, game_ids: list[str]) -> pd.DataFrame
     stmt = (
         select(Game, FeatureVector)
         .join(FeatureVector, FeatureVector.game_id == Game.id)
-        .where(
-            Game.id.in_(game_ids), FeatureVector.feature_set_version == FEATURE_SET_VERSION
-        )
+        .where(Game.id.in_(game_ids), FeatureVector.feature_set_version == FEATURE_SET_VERSION)
     )
     rows = []
     for game, feature_vector in session.execute(stmt).all():

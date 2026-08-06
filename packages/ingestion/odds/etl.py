@@ -5,9 +5,8 @@ Every call to `ingest_odds_payload` is a fresh INSERT batch (never an update)
 line movement is just "select ordered by captured_at" downstream.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -71,7 +70,7 @@ def _match_game(
 def ingest_odds_payload(
     session: Session, odds_payload: list[dict[str, Any]], *, captured_at: datetime | None = None
 ) -> int:
-    captured_at = captured_at or datetime.now(timezone.utc)
+    captured_at = captured_at or datetime.now(UTC)
 
     teams = session.execute(select(Team).where(Team.sport == Sport.MLB)).scalars().all()
     team_name_index = build_name_index({team.name: str(team.id) for team in teams})

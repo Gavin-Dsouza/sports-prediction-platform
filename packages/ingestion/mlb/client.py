@@ -97,9 +97,7 @@ class MlbStatsApiClient:
         roster: list[dict[str, Any]] = data.get("roster", [])
         return roster
 
-    def get_transactions(
-        self, start_date: date, end_date: date
-    ) -> list[dict[str, Any]]:
+    def get_transactions(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         """Roster transactions (trades, call-ups, and — the piece we care about
         for injuries — IL moves). MLB Stats API has no dedicated "injuries"
         endpoint; IL placements/activations show up here as transaction records.

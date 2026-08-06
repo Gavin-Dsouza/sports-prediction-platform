@@ -9,7 +9,7 @@ are a follow-up once the moneyline path is validated end-to-end.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 import numpy as np
@@ -123,7 +123,7 @@ def build_recommendations(
                     kelly_fraction=kelly,
                     recommended_stake_fraction=kelly * FRACTIONAL_KELLY_MULTIPLIER,
                     confidence_score=confidence,
-                    generated_at=datetime.now(timezone.utc),
+                    generated_at=datetime.now(UTC),
                 )
             )
 

@@ -42,7 +42,10 @@ def fetch_statcast_range(
     from pybaseball import statcast
 
     logger.info("statcast_fetch_start", start=start_date.isoformat(), end=end_date.isoformat())
-    frame = statcast(start_dt=start_date.isoformat(), end_dt=end_date.isoformat())
+    # pybaseball ships no type stubs, so `statcast(...)` is Any as far as
+    # mypy's concerned — annotate explicitly rather than let Any silently
+    # propagate out through this function's declared DataFrame return type.
+    frame: pd.DataFrame = statcast(start_dt=start_date.isoformat(), end_dt=end_date.isoformat())
     frame.to_parquet(cache_path, index=False)
     logger.info("statcast_fetch_complete", rows=len(frame), path=str(cache_path))
     return frame

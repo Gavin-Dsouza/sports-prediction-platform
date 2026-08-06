@@ -5,7 +5,7 @@ call directly (no Celery/broker needed to test business logic), and Celery is
 only responsible for scheduling + retries here.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -101,7 +101,7 @@ def train_and_recommend() -> dict[str, int]:
         # every model's output for game i at index i across every array below.
         per_model = ensemble.per_model_predictions(inference_frame)
         ensemble_probs = ensemble.predict_proba(inference_frame)
-        predicted_at = datetime.now(timezone.utc)
+        predicted_at = datetime.now(UTC)
 
         for i, game in enumerate(ordered_games):
             for predictor_name, probs in per_model.items():

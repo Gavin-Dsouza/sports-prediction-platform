@@ -45,3 +45,6 @@ apps/web/.env*.local
 
 # Alembic
 *.sqlite3
+
+# Runtime logs from local/backgrounded scripts (e.g. nohup backfill runs)
+*.log
