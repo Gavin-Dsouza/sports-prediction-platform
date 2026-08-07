@@ -39,8 +39,12 @@ def _bet(
 def test_build_parlays_never_combines_two_legs_from_same_game():
     shared_game = uuid.uuid4()
     bets = [
-        _bet(game_id=shared_game, predicted_probability=0.6, price_decimal=1.8, expected_value=0.05),
-        _bet(game_id=shared_game, predicted_probability=0.55, price_decimal=1.9, expected_value=0.1),
+        _bet(
+            game_id=shared_game, predicted_probability=0.6, price_decimal=1.8, expected_value=0.05
+        ),
+        _bet(
+            game_id=shared_game, predicted_probability=0.55, price_decimal=1.9, expected_value=0.1
+        ),
         _bet(predicted_probability=0.6, price_decimal=1.7, expected_value=0.03),
     ]
 
@@ -57,13 +61,19 @@ def test_build_parlays_never_combines_two_legs_from_same_game():
 
 def test_build_parlays_keeps_higher_ev_leg_when_game_has_two_bets():
     shared_game = uuid.uuid4()
-    lower = _bet(game_id=shared_game, predicted_probability=0.55, price_decimal=1.9, expected_value=0.02)
-    higher = _bet(game_id=shared_game, predicted_probability=0.6, price_decimal=1.8, expected_value=0.2)
+    lower = _bet(
+        game_id=shared_game, predicted_probability=0.55, price_decimal=1.9, expected_value=0.02
+    )
+    higher = _bet(
+        game_id=shared_game, predicted_probability=0.6, price_decimal=1.8, expected_value=0.2
+    )
     other = _bet(predicted_probability=0.6, price_decimal=1.7, expected_value=0.03)
 
     results = build_parlays([lower, higher, other])
 
-    all_legs = {leg.id for by_category in results.values() for c in by_category.values() for leg in c.legs}
+    all_legs = {
+        leg.id for by_category in results.values() for c in by_category.values() for leg in c.legs
+    }
     assert higher.id in all_legs
     assert lower.id not in all_legs
 
@@ -81,7 +91,10 @@ def test_build_parlays_skips_bets_with_no_price():
 
 
 def test_build_parlays_respects_min_and_max_legs():
-    bets = [_bet(predicted_probability=0.6, price_decimal=1.8, expected_value=0.05 + i * 0.01) for i in range(8)]
+    bets = [
+        _bet(predicted_probability=0.6, price_decimal=1.8, expected_value=0.05 + i * 0.01)
+        for i in range(8)
+    ]
 
     results = build_parlays(bets)
 

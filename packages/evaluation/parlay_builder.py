@@ -47,7 +47,9 @@ def _combined_stats(legs: list[BetRecommendation]) -> tuple[float, float, float]
     return combined_probability, combined_decimal_odds, combined_ev
 
 
-def build_parlays(bets: list[BetRecommendation]) -> dict[int, dict[ParlayCategory, ParlayCandidate]]:
+def build_parlays(
+    bets: list[BetRecommendation],
+) -> dict[int, dict[ParlayCategory, ParlayCandidate]]:
     """`bets` should already be today's positive-EV recommendations (the
     same set the dashboard's "Ranked +EV Bets" table shows). Returns
     `{leg_count: {category: best candidate for that category}}` — three

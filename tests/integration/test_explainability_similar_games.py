@@ -13,13 +13,17 @@ _NON_NUMERIC = {"game_id": "unused", "feature_set_version": FEATURE_SET_VERSION}
 
 
 def _team(db_session, external_id: str, abbreviation: str) -> Team:
-    team = Team(sport=Sport.MLB, external_id=external_id, name=abbreviation, abbreviation=abbreviation)
+    team = Team(
+        sport=Sport.MLB, external_id=external_id, name=abbreviation, abbreviation=abbreviation
+    )
     db_session.add(team)
     db_session.flush()
     return team
 
 
-def _game_with_features(db_session, home: Team, away: Team, features: dict, *, final: bool = True) -> Game:
+def _game_with_features(
+    db_session, home: Team, away: Team, features: dict, *, final: bool = True
+) -> Game:
     game = Game(
         sport=Sport.MLB,
         external_id=f"g-{home.abbreviation}-{away.abbreviation}-{len(features)}-{features.get('era_diff', 0)}",

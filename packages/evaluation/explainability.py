@@ -171,12 +171,16 @@ def explain_ensemble_prediction(
         if isinstance(predictor, XGBoostPredictor):
             contributions = _shap_xgboost(predictor, row)
             for c in contributions:
-                shap_combined[c.feature] = shap_combined.get(c.feature, 0.0) + weight * c.contribution
+                shap_combined[c.feature] = (
+                    shap_combined.get(c.feature, 0.0) + weight * c.contribution
+                )
             shap_weight += weight
         elif isinstance(predictor, LogisticRegressionPredictor):
             contributions = _shap_logistic_regression(predictor, row, background)
             for c in contributions:
-                shap_combined[c.feature] = shap_combined.get(c.feature, 0.0) + weight * c.contribution
+                shap_combined[c.feature] = (
+                    shap_combined.get(c.feature, 0.0) + weight * c.contribution
+                )
             shap_weight += weight
         else:
             importance = predictor.feature_importance()
@@ -193,7 +197,9 @@ def explain_ensemble_prediction(
         importance_combined = {k: v / importance_weight for k, v in importance_combined.items()}
 
     top_reasons = sorted(shap_combined.items(), key=lambda kv: abs(kv[1]), reverse=True)[:top_n]
-    also_considered = sorted(importance_combined.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    also_considered = sorted(importance_combined.items(), key=lambda kv: kv[1], reverse=True)[
+        :top_n
+    ]
 
     return {
         "top_reasons": [{"feature": f, "contribution": round(v, 4)} for f, v in top_reasons],

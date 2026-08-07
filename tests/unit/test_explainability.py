@@ -121,8 +121,6 @@ def test_top_n_limits_result_size():
     xgb = XGBoostPredictor()
     ensemble = _StubEnsemble(predictors=[xgb], weights={PredictorName.XGBOOST: 1.0})
 
-    result = explain_ensemble_prediction(
-        ensemble, pd.DataFrame([{}]), pd.DataFrame([{}]), top_n=1
-    )
+    result = explain_ensemble_prediction(ensemble, pd.DataFrame([{}]), pd.DataFrame([{}]), top_n=1)
 
     assert len(result["top_reasons"]) == 1
