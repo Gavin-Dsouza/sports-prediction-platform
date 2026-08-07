@@ -31,6 +31,7 @@ IDENTITY_COLUMNS = (
     "home_team_id",
     "away_team_id",
     "game_date",
+    "game_datetime",
     "home_win",
     "home_score",
     "away_score",

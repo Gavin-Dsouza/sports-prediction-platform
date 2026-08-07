@@ -12,7 +12,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from packages.core.db_models import Game, OddsSnapshot, PlayerGameStats
-from packages.core.enums import GameStatus, Market, Selection
+from packages.core.enums import GameStatus, Market, Selection, Sportsbook
 
 # Recency-weighted mean: index 0 = most recent game, geometric decay per game
 # back in the window. This is what turns "rolling average" into "rolling
@@ -166,36 +166,48 @@ def away_win_pct(session: Session, team_id: UUID, as_of: date, season: int) -> f
     return wins / len(games)
 
 
+def _preferred_sportsbook(rows: list[OddsSnapshot]) -> Sportsbook | None:
+    """Pick one sportsbook to source opening/latest/line-movement features
+    from consistently. Mixing books mid-comparison isn't real line movement
+    — a single poll (`ingest_odds_payload`) writes every book's rows under
+    one shared `captured_at`, so without this, "opening" and "latest" (or
+    home vs. away) can each resolve to a different, unrelated book's price.
+    Prefers the odds-API consensus book when present (one representative
+    number); otherwise falls back to whichever book most recently quoted.
+    """
+    if not rows:
+        return None
+    books = {r.sportsbook for r in rows}
+    if Sportsbook.THE_ODDS_API_CONSENSUS in books:
+        return Sportsbook.THE_ODDS_API_CONSENSUS
+    return max(rows, key=lambda r: r.captured_at).sportsbook
+
+
 def market_snapshot_features(
     session: Session, game_id: UUID, as_of: datetime
 ) -> dict[str, float | None]:
     """Opening/latest moneyline-implied home probability + line movement, and
-    the latest total line, using only quotes captured before `as_of`.
+    the latest total line, using only quotes captured before `as_of`, all
+    sourced from a single consistently-chosen sportsbook (see
+    `_preferred_sportsbook`).
     """
-    ml_stmt = (
-        select(OddsSnapshot)
-        .where(
-            OddsSnapshot.game_id == game_id,
-            OddsSnapshot.market == Market.MONEYLINE,
-            OddsSnapshot.selection == Selection.HOME,
-            OddsSnapshot.captured_at < as_of,
-        )
-        .order_by(OddsSnapshot.captured_at.asc())
+    all_ml_stmt = select(OddsSnapshot).where(
+        OddsSnapshot.game_id == game_id,
+        OddsSnapshot.market == Market.MONEYLINE,
+        OddsSnapshot.captured_at < as_of,
     )
-    home_ml_snapshots = list(session.execute(ml_stmt).scalars().all())
+    all_ml = list(session.execute(all_ml_stmt).scalars().all())
+    book = _preferred_sportsbook(all_ml)
 
-    away_ml_stmt = (
-        select(OddsSnapshot)
-        .where(
-            OddsSnapshot.game_id == game_id,
-            OddsSnapshot.market == Market.MONEYLINE,
-            OddsSnapshot.selection == Selection.AWAY,
-            OddsSnapshot.captured_at < as_of,
-        )
-        .order_by(OddsSnapshot.captured_at.desc())
-        .limit(1)
+    home_ml_snapshots = sorted(
+        (r for r in all_ml if r.selection == Selection.HOME and r.sportsbook == book),
+        key=lambda r: r.captured_at,
     )
-    latest_away_ml = session.execute(away_ml_stmt).scalars().first()
+    away_ml_snapshots = sorted(
+        (r for r in all_ml if r.selection == Selection.AWAY and r.sportsbook == book),
+        key=lambda r: r.captured_at,
+    )
+    latest_away_ml = away_ml_snapshots[-1] if away_ml_snapshots else None
 
     total_stmt = (
         select(OddsSnapshot)
@@ -209,19 +221,31 @@ def market_snapshot_features(
     )
     latest_total = session.execute(total_stmt).scalars().first()
 
+    # `implied_probability` is nullable — a missing value is missing data,
+    # not a genuine 0% probability, so it must stay `None` here rather than
+    # silently becoming a fabricated market signal fed into model training.
     market_home_implied_prob = None
     line_movement = None
     if home_ml_snapshots:
-        opening = float(home_ml_snapshots[0].implied_probability or 0)
-        latest = float(home_ml_snapshots[-1].implied_probability or 0)
-        market_home_implied_prob = latest
-        line_movement = latest - opening
+        opening_row, latest_row = home_ml_snapshots[0], home_ml_snapshots[-1]
+        if (
+            opening_row.implied_probability is not None
+            and latest_row.implied_probability is not None
+        ):
+            opening = float(opening_row.implied_probability)
+            latest = float(latest_row.implied_probability)
+            market_home_implied_prob = latest
+            line_movement = latest - opening
+
+    market_away_implied_prob = (
+        float(latest_away_ml.implied_probability)
+        if latest_away_ml is not None and latest_away_ml.implied_probability is not None
+        else None
+    )
 
     return {
         "market_home_implied_prob": market_home_implied_prob,
-        "market_away_implied_prob": (
-            float(latest_away_ml.implied_probability or 0) if latest_away_ml else None
-        ),
+        "market_away_implied_prob": market_away_implied_prob,
         "market_total_line": (
             float(latest_total.line) if latest_total and latest_total.line is not None else None
         ),

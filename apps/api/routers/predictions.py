@@ -55,11 +55,20 @@ def predictions_for_date(
             continue
 
         latest_version = predictions[0].model_version
-        latest_by_model = {
-            p.predictor_name.value: float(p.probability)
-            for p in predictions
-            if p.model_version == latest_version
-        }
+        # `predictions` is ordered `predicted_at.desc()` (newest first). A
+        # same-day rerun of train_and_recommend (manual retrigger, retry)
+        # writes a second row per predictor with the same `model_version`
+        # (it doesn't change unless the registry promotes) — a plain dict
+        # comprehension would overwrite with each match in iteration order,
+        # so the LAST-processed (oldest) row would win instead of the
+        # newest. Keep only the first (newest) row seen per predictor.
+        latest_by_model: dict[str, float] = {}
+        for p in predictions:
+            if p.model_version != latest_version:
+                continue
+            key = p.predictor_name.value
+            if key not in latest_by_model:
+                latest_by_model[key] = float(p.probability)
         ensemble_prob = latest_by_model.pop("ensemble", None)
 
         results.append(

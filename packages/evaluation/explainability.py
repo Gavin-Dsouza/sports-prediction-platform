@@ -19,6 +19,7 @@ import sys
 from dataclasses import dataclass
 from types import ModuleType
 from typing import cast
+from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -213,11 +214,17 @@ def find_similar_historical_games(
 ) -> list[SimilarGame]:
     """Nearest neighbors by cosine similarity over the same numeric feature
     vectors already persisted in `feature_vectors`, restricted to completed
-    games (so the comparison includes what actually happened). O(n) over
-    historical games — fine at current data volume (a few thousand rows);
-    an index (e.g. pgvector) is a reasonable upgrade if this table grows
-    large enough for it to matter, not needed yet.
+    games that happened before the target game (so "similar historical game"
+    is actually historical relative to it, not a same-season game that just
+    happens to have been ingested already). O(n) over historical games — fine
+    at current data volume (a few thousand rows); an index (e.g. pgvector) is
+    a reasonable upgrade if this table grows large enough for it to matter,
+    not needed yet.
     """
+    current_game = session.get(Game, UUID(current_game_id))
+    if current_game is None:
+        return []
+
     stmt = (
         select(Game, FeatureVector)
         .join(FeatureVector, FeatureVector.game_id == Game.id)
@@ -227,6 +234,7 @@ def find_similar_historical_games(
             Game.status == GameStatus.FINAL,
             FeatureVector.feature_set_version == FEATURE_SET_VERSION,
             Game.id != current_game_id,
+            Game.game_date < current_game.game_date,
         )
     )
     rows = session.execute(stmt).unique().all()

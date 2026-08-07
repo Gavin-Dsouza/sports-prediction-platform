@@ -47,7 +47,15 @@ class PoissonPredictor:
         # or appear to hang entirely rather than erroring. Drop constant
         # columns before fitting; predict_proba reuses this same reduced
         # column list below, so there's no train/inference mismatch.
-        self._feature_columns = [c for c in candidate_columns if numeric_frame[c].std() > 0]
+        # ddof=0 (population, not sample, std): pandas' default ddof=1 divides
+        # by (n-1), which returns NaN — not 0 — for a single-row frame, and
+        # `NaN > 0` is False, so every column (not just genuinely-constant
+        # ones) would get silently dropped, degrading to an intercept-only
+        # fit. A realistic case, not just a theoretical one: this fit() runs
+        # on `WeightedEnsemble`'s train split, which is exactly 1 row
+        # whenever the full frame has too few games for `MIN_VALIDATION_ROWS`
+        # — e.g. very early in a season backfill.
+        self._feature_columns = [c for c in candidate_columns if numeric_frame[c].std(ddof=0) > 0]
         X = sm.add_constant(numeric_frame[self._feature_columns])
 
         self._home_results = sm.GLM(

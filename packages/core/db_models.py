@@ -55,8 +55,21 @@ def _str_enum(enum_cls: type, name: str) -> SAEnum:
     Postgres enum labels. `values_callable` makes the two consistent;
     without it, every insert/read of an enum column would raise a
     "invalid input value for enum" error at the DB.
+
+    `create_type=False`: every one of these enum names (e.g. "sport") is
+    reused across multiple columns/tables, and each call to `_str_enum`
+    constructs a distinct `SAEnum` object — without this, any DDL path that
+    lets SQLAlchemy (not Alembic's explicit `PGEnum(...).create()`) attempt
+    to create the Postgres type — `Base.metadata.create_all()` against a
+    fresh DB, or a future `alembic revision --autogenerate` — raises
+    `DuplicateObject: type "sport" already exists` the second time the name
+    is reused. Same reasoning as the `create_type=False` note at the top of
+    `alembic/versions/0001_initial_schema.py`; this is the ORM-side half of
+    the same rule.
     """
-    return SAEnum(enum_cls, name=name, values_callable=lambda obj: [e.value for e in obj])
+    return SAEnum(
+        enum_cls, name=name, values_callable=lambda obj: [e.value for e in obj], create_type=False
+    )
 
 
 class TimestampMixin:
@@ -118,13 +131,21 @@ class Game(Base, TimestampMixin):
     )
     double_header_number: Mapped[int | None] = mapped_column()
 
-    home_team_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("teams.id"), nullable=False)
-    away_team_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("teams.id"), nullable=False)
+    home_team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id"), nullable=False, index=True
+    )
+    away_team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id"), nullable=False, index=True
+    )
     home_score: Mapped[int | None] = mapped_column()
     away_score: Mapped[int | None] = mapped_column()
 
-    home_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("players.id"))
-    away_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("players.id"))
+    home_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("players.id"), index=True
+    )
+    away_starting_pitcher_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("players.id"), index=True
+    )
 
     venue_external_id: Mapped[str | None] = mapped_column(String(64))
     venue_name: Mapped[str | None] = mapped_column(String(128))
@@ -205,7 +226,12 @@ class Injury(Base, TimestampMixin):
     report_date: Mapped[date] = mapped_column(Date, nullable=False)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    __table_args__ = (Index("ix_injuries_player_report_date", "player_id", "report_date"),)
+    __table_args__ = (
+        Index("ix_injuries_player_report_date", "player_id", "report_date"),
+        UniqueConstraint(
+            "player_id", "report_date", "status", name="uq_injuries_player_date_status"
+        ),
+    )
 
 
 class OddsSnapshot(Base):
@@ -233,7 +259,21 @@ class OddsSnapshot(Base):
     implied_probability: Mapped[float | None] = mapped_column(Numeric(6, 5))
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
 
-    __table_args__ = (Index("ix_odds_snapshots_game_market", "game_id", "market", "captured_at"),)
+    __table_args__ = (
+        Index("ix_odds_snapshots_game_market", "game_id", "market", "captured_at"),
+        # Dedups exact-duplicate poll rows (a poller retry after a timeout
+        # whose write actually succeeded, etc.) — must include `captured_at`
+        # since that's the hypertable's partitioning column, and every
+        # unique constraint on a hypertable is required to include it.
+        UniqueConstraint(
+            "game_id",
+            "market",
+            "selection",
+            "sportsbook",
+            "captured_at",
+            name="uq_odds_snapshots_dedup",
+        ),
+    )
 
 
 class FeatureVector(Base):
@@ -275,6 +315,18 @@ class Prediction(Base):
             "market",
             "predictor_name",
         ),
+        # Prevents a retried/rerun train_and_recommend from accumulating
+        # duplicate rows for the same game/predictor/model version — without
+        # this, `apps.api.routers.predictions` has to disambiguate duplicates
+        # by `predicted_at` ordering alone, and backtests double-count.
+        UniqueConstraint(
+            "game_id",
+            "market",
+            "selection",
+            "predictor_name",
+            "model_version",
+            name="uq_predictions_game_market_selection_predictor_version",
+        ),
     )
 
 
@@ -282,7 +334,7 @@ class BetRecommendation(Base):
     __tablename__ = "bets_recommended"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("games.id"), nullable=False)
+    game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("games.id"), nullable=False, index=True)
     market: Mapped[Market] = mapped_column(_str_enum(Market, "market"), nullable=False)
     selection: Mapped[Selection] = mapped_column(_str_enum(Selection, "selection"), nullable=False)
     odds_snapshot_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -361,7 +413,7 @@ class ParlayLeg(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     parlay_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("parlays.id"), nullable=False)
     bet_recommendation_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("bets_recommended.id"), nullable=False
+        ForeignKey("bets_recommended.id"), nullable=False, index=True
     )
     leg_order: Mapped[int] = mapped_column(nullable=False)
 

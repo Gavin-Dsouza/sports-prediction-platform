@@ -177,27 +177,39 @@ def train_and_recommend() -> dict[str, int]:
             # dependency issue) should never take down bet-recommendation
             # generation, which is the actually load-bearing part of this task.
             try:
-                explanation = explain_ensemble_prediction(
-                    ensemble, inference_frame.iloc[[i]], background_frame
-                )
-                feature_vector = db.execute(
-                    select(FeatureVector).where(
-                        FeatureVector.game_id == game.id,
-                        FeatureVector.feature_set_version == FEATURE_SET_VERSION,
+                # A SAVEPOINT (not the outer transaction) around this game's
+                # explanation work: if a DB-originated failure here (e.g. the
+                # FeatureVector query below) leaves the session invalidated,
+                # a plain `db.rollback()` would discard every earlier game's
+                # already-`db.add()`-ed, not-yet-committed Prediction rows
+                # too, since this whole task runs inside one
+                # `session_scope()` transaction. `begin_nested()` scopes the
+                # rollback to just this block on exception, so one game's
+                # explanation failure can't wipe out unrelated already-staged
+                # work or cascade into `PendingRollbackError` on the next
+                # statement.
+                with db.begin_nested():
+                    explanation = explain_ensemble_prediction(
+                        ensemble, inference_frame.iloc[[i]], background_frame
                     )
-                ).scalar_one_or_none()
-                similar_games = (
-                    find_similar_historical_games(db, str(game.id), feature_vector.features)
-                    if feature_vector is not None
-                    else []
-                )
-                db.add(
-                    PredictionExplanation(
-                        prediction_id=ensemble_prediction_id,
-                        feature_contributions=explanation,
-                        similar_games=[asdict(g) for g in similar_games],
+                    feature_vector = db.execute(
+                        select(FeatureVector).where(
+                            FeatureVector.game_id == game.id,
+                            FeatureVector.feature_set_version == FEATURE_SET_VERSION,
+                        )
+                    ).scalar_one_or_none()
+                    similar_games = (
+                        find_similar_historical_games(db, str(game.id), feature_vector.features)
+                        if feature_vector is not None
+                        else []
                     )
-                )
+                    db.add(
+                        PredictionExplanation(
+                            prediction_id=ensemble_prediction_id,
+                            feature_contributions=explanation,
+                            similar_games=[asdict(g) for g in similar_games],
+                        )
+                    )
             except Exception:
                 logger.exception("prediction_explanation_failed", game_id=str(game.id))
 

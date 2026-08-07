@@ -17,21 +17,20 @@ are still computed.
 """
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 
 import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from packages.core.db_models import BacktestResult, BacktestRun, OddsSnapshot
+from packages.core.db_models import BacktestResult, BacktestRun, Game, OddsSnapshot
 from packages.core.enums import Market, PredictorName, Selection
 from packages.core.enums import Sport as SportEnum
 from packages.core.logging import get_logger
-from packages.evaluation.ev_engine import FRACTIONAL_KELLY_MULTIPLIER
+from packages.evaluation.ev_engine import FRACTIONAL_KELLY_MULTIPLIER, select_same_book_quote_pair
 from packages.evaluation.metrics import BacktestMetrics, BetOutcome, compute_backtest_metrics
-from packages.evaluation.odds_math import edge as compute_edge
-from packages.evaluation.odds_math import kelly_fraction, remove_vig_two_way
+from packages.evaluation.odds_math import expected_value, kelly_fraction, remove_vig_two_way
 from packages.models.dataset import build_training_frame
 from packages.models.ensemble import WeightedEnsemble
 
@@ -50,23 +49,37 @@ class HistoricalQuote:
 
 
 def _historical_moneyline_quote(session: Session, game_id: str) -> HistoricalQuote | None:
+    game = session.get(Game, UUID(game_id))
+    if game is None:
+        return None
+    # Never price a historical bet off a quote captured at/after the game's
+    # actual start — that's a settlement/live/in-play price nothing in
+    # `ingest_odds_payload` prevents from being stored, and using it here
+    # would backtest against a price no pregame bettor could ever have
+    # gotten, inflating reported ROI. Falls back to end-of-day when the
+    # precise start time isn't known.
+    cutoff = game.game_datetime or datetime.combine(game.game_date, time.max, tzinfo=UTC)
+
     stmt = (
         select(OddsSnapshot)
         .where(
             OddsSnapshot.game_id == UUID(game_id),
             OddsSnapshot.market == Market.MONEYLINE,
+            OddsSnapshot.captured_at < cutoff,
         )
         .order_by(OddsSnapshot.captured_at.desc())
         .limit(20)
     )
     recent = list(session.execute(stmt).scalars().all())
-    home_quote = next((q for q in recent if q.selection == Selection.HOME), None)
-    away_quote = next((q for q in recent if q.selection == Selection.AWAY), None)
-    if home_quote is None or away_quote is None:
+    pair = select_same_book_quote_pair(recent)
+    if pair is None:
+        return None
+    home_quote, away_quote = pair
+    if home_quote.implied_probability is None or away_quote.implied_probability is None:
         return None
 
     home_fair, away_fair = remove_vig_two_way(
-        float(home_quote.implied_probability or 0), float(away_quote.implied_probability or 0)
+        float(home_quote.implied_probability), float(away_quote.implied_probability)
     )
     return HistoricalQuote(
         home_decimal_odds=float(home_quote.price_decimal),
@@ -129,24 +142,28 @@ def run_walk_forward_backtest(
             if quote is None:
                 continue  # no market price for this historical game — see module docstring
 
-            for _selection, predicted_prob, decimal_odds, fair_implied, won in (
+            for _selection, predicted_prob, decimal_odds, won in (
                 (
                     Selection.HOME,
                     predicted_home_prob,
                     quote.home_decimal_odds,
-                    quote.home_implied_fair,
                     actual_home_win == 1,
                 ),
                 (
                     Selection.AWAY,
                     1 - predicted_home_prob,
                     quote.away_decimal_odds,
-                    quote.away_implied_fair,
                     actual_home_win == 0,
                 ),
             ):
-                if compute_edge(predicted_prob, fair_implied) <= 0:
-                    continue  # strategy under test: only bet positive-EV edges
+                # Strategy under test: only bet positive-EV edges. Gate on EV
+                # itself (not `edge`, which compares against the de-vigged
+                # fair probability and can disagree with EV's sign near a
+                # break-even price) — `kelly_fraction` already zeroes out a
+                # non-positive-EV stake, but gating here directly keeps that
+                # invariant from depending on kelly_fraction's internals.
+                if expected_value(predicted_prob, decimal_odds) <= 0:
+                    continue
                 stake = kelly_fraction(predicted_prob, decimal_odds) * FRACTIONAL_KELLY_MULTIPLIER
                 if stake <= 0:
                     continue

@@ -45,7 +45,15 @@ def build_training_frame(
             Game.status == GameStatus.FINAL,
             FeatureVector.feature_set_version == FEATURE_SET_VERSION,
         )
-        .order_by(Game.game_date.asc())
+        # `game_date` alone has no tiebreak for doubleheaders (same two teams,
+        # same date, two games) — Postgres gives no ordering guarantee among
+        # ties without one, so which of the two games gets processed "first"
+        # by Elo's sequential rating update (see `EloPredictor.fit`) could
+        # vary run to run, letting a later game's result leak into an
+        # earlier game's rating. `game_datetime` (start time) breaks the tie;
+        # it's nullable so NULLS FIRST-by-default ordering still needs
+        # `game_date` as the primary key to stay correct for rows without it.
+        .order_by(Game.game_date.asc(), Game.game_datetime.asc())
     )
     if season_start is not None:
         stmt = stmt.where(Game.season >= season_start)
@@ -61,6 +69,7 @@ def build_training_frame(
                 "home_team_id": str(game.home_team_id),
                 "away_team_id": str(game.away_team_id),
                 "game_date": game.game_date,
+                "game_datetime": game.game_datetime,
                 "home_score": game.home_score,
                 "away_score": game.away_score,
                 "home_win": int((game.home_score or 0) > (game.away_score or 0)),
@@ -94,6 +103,7 @@ def build_inference_frame(session: Session, game_ids: list[str]) -> pd.DataFrame
                 "home_team_id": str(game.home_team_id),
                 "away_team_id": str(game.away_team_id),
                 "game_date": game.game_date,
+                "game_datetime": game.game_datetime,
                 "home_score": None,
                 "away_score": None,
                 "home_win": None,

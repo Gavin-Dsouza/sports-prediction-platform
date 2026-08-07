@@ -34,12 +34,27 @@ class WeightedEnsemble:
     name = PredictorName.ENSEMBLE
 
     def __init__(self, predictors: list[Predictor] | None = None) -> None:
-        self.predictors: list[Predictor] = predictors or _default_predictors()
+        # `predictors if predictors is not None else ...`, NOT `predictors or
+        # ...` — an explicitly passed `[]` is falsy too, and `or` would
+        # silently replace a caller's genuinely-empty predictor list with the
+        # full 4-model default roster instead of respecting it.
+        self.predictors: list[Predictor] = (
+            predictors if predictors is not None else _default_predictors()
+        )
         self.weights: dict[PredictorName, float] = {}
         self.validation_log_loss: dict[PredictorName, float] = {}
 
     def fit(self, frame: pd.DataFrame) -> None:
-        frame = frame.sort_values("game_date").reset_index(drop=True)
+        # `game_date` alone has no tiebreak for doubleheaders (two games,
+        # same teams, same date) — sorting on `game_datetime` too, with a
+        # stable sort algorithm (pandas' default `quicksort` gives no
+        # ordering guarantee among ties), keeps Elo's sequential rating
+        # update (see `EloPredictor.fit`) from ever processing a
+        # chronologically-later game before an earlier one, which would leak
+        # that later result into the earlier game's expected-win-probability.
+        frame = frame.sort_values(["game_date", "game_datetime"], kind="stable").reset_index(
+            drop=True
+        )
         split_idx = max(
             len(frame) - max(int(len(frame) * VALIDATION_FRACTION), MIN_VALIDATION_ROWS),
             1,

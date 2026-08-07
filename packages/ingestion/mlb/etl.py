@@ -157,21 +157,42 @@ def upsert_game(
         and bool((game_payload.get("venue") or {}).get("isNeutralSite", False)),
     }
 
-    stmt = (
-        pg_insert(Game)
-        .values(**values)
-        .on_conflict_do_update(
-            index_elements=["sport", "external_id"],
-            set_={
-                "status": values["status"],
-                "home_score": values["home_score"],
-                "away_score": values["away_score"],
-                "game_datetime": values["game_datetime"],
-            },
-        )
-        .returning(Game.id)
-    )
-    game_id: UUID = session.execute(stmt).scalar_one()
+    insert_stmt = pg_insert(Game).values(**values)
+    stmt = insert_stmt.on_conflict_do_update(
+        index_elements=["sport", "external_id"],
+        set_={
+            "status": values["status"],
+            "home_score": values["home_score"],
+            "away_score": values["away_score"],
+            "game_datetime": values["game_datetime"],
+            # Rescheduled/makeup games keep the same external_id but move to
+            # a new date/venue — without refreshing these too, the game stays
+            # bucketed under its originally-scheduled date forever, which
+            # `packages.features.builders` keys every rolling window off of.
+            "game_date": values["game_date"],
+            "venue_name": values["venue_name"],
+            "double_header_number": values["double_header_number"],
+            "is_neutral_site": values["is_neutral_site"],
+        },
+        # Two overlapping ingestion runs (daily_sync's rolling window and a
+        # manual backfill, or a retried Celery task) can race and commit out
+        # of order: a slower fetch that saw the game mid-inning could
+        # otherwise land AFTER a faster fetch that saw it FINAL, silently
+        # regressing status back to LIVE and overwriting the real final
+        # score with an in-progress one. Once a row is FINAL, only another
+        # FINAL payload (a genuine score correction) may update it.
+        where=(Game.status != GameStatus.FINAL) | (insert_stmt.excluded.status == GameStatus.FINAL),
+    ).returning(Game.id)
+    result = session.execute(stmt).scalar_one_or_none()
+    if result is None:
+        # The WHERE clause suppressed the update (a stale non-FINAL payload
+        # arrived after the row was already FINAL) — the row still exists,
+        # just unchanged by this call; look its id up directly.
+        game_id = session.execute(
+            select(Game.id).where(Game.sport == Sport.MLB, Game.external_id == external_id)
+        ).scalar_one()
+    else:
+        game_id = result
 
     # Probable/starting pitchers, when present, are linked after the initial
     # insert since they reference `players` which may not exist yet.
@@ -356,14 +377,26 @@ def upsert_injuries_from_transactions(
             ).scalar_one_or_none()
 
         report_date = date.fromisoformat(txn["date"]) if txn.get("date") else date.today()
+        status = txn.get("typeDesc", "Injured List")
 
-        stmt = pg_insert(Injury).values(
-            player_id=player_id,
-            team_id=team.id if team else None,
-            status=txn.get("typeDesc", "Injured List"),
-            description=txn.get("description"),
-            report_date=report_date,
-            source="mlb_stats_api_transactions",
+        stmt = (
+            pg_insert(Injury)
+            .values(
+                player_id=player_id,
+                team_id=team.id if team else None,
+                status=status,
+                description=txn.get("description"),
+                report_date=report_date,
+                source="mlb_stats_api_transactions",
+            )
+            .on_conflict_do_update(
+                index_elements=["player_id", "report_date", "status"],
+                set_={
+                    "team_id": team.id if team else None,
+                    "description": txn.get("description"),
+                    "source": "mlb_stats_api_transactions",
+                },
+            )
         )
         session.execute(stmt)
         count += 1

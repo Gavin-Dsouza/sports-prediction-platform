@@ -35,10 +35,15 @@ def remove_vig_two_way(implied_prob_a: float, implied_prob_b: float) -> tuple[fl
     both implied probabilities down so they sum to 1. This is the simplest of
     several standard de-vig methods (vs. e.g. Shin's method) — adequate for
     M1; swapping the method later doesn't change any caller's signature.
+
+    Both inputs must be genuine implied probabilities in (0, 1] — callers
+    must resolve a missing/`None` quote before calling this rather than
+    substituting 0, which would silently fabricate a 100%-confidence "fair"
+    price for the other side instead of surfacing the missing data.
     """
+    if not (0 < implied_prob_a <= 1) or not (0 < implied_prob_b <= 1):
+        raise ValueError("Implied probabilities must be in (0, 1] before vig removal")
     total = implied_prob_a + implied_prob_b
-    if total <= 0:
-        raise ValueError("Implied probabilities must sum to a positive number")
     return implied_prob_a / total, implied_prob_b / total
 
 
@@ -63,7 +68,11 @@ def kelly_fraction(true_probability: float, decimal_odds: float) -> float:
         return 0.0
     edge = true_probability * (b + 1) - 1  # == true_probability*(b) - (1-true_probability)
     fraction = edge / b
-    return max(fraction, 0.0)
+    # Mathematically bounded to <=1.0 only when true_probability is itself
+    # in [0, 1]; clamp defensively so a bad upstream probability (e.g. a
+    # model output that slipped past its own clipping) can never turn into
+    # a >100%-of-bankroll stake recommendation.
+    return min(max(fraction, 0.0), 1.0)
 
 
 def edge(true_probability: float, market_implied_probability: float) -> float:

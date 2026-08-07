@@ -24,6 +24,7 @@ import mlflow
 import redis
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
+from redis.exceptions import LockError
 
 from packages.core.config import get_settings
 from packages.core.enums import PredictorName
@@ -109,8 +110,25 @@ def register_and_maybe_promote(training_result: TrainingResult) -> RegistryDecis
     settings = get_settings()
     redis_client = redis.Redis.from_url(settings.redis_url)
 
-    with redis_client.lock(_PROMOTION_LOCK_KEY, timeout=_PROMOTION_LOCK_TIMEOUT_SECONDS):
+    # Acquired/released manually (not via `with lock:`) so a lock that
+    # expired out from under us can be handled explicitly rather than
+    # crashing the whole task on exit: by the time `release()` runs, the
+    # decision below has already been made and (if `promote`) the alias
+    # already written to MLflow — that side effect can't be un-done by
+    # raising here, so a release failure is logged, not propagated.
+    lock = redis_client.lock(_PROMOTION_LOCK_KEY, timeout=_PROMOTION_LOCK_TIMEOUT_SECONDS)
+    if not lock.acquire(blocking=True):
+        raise RuntimeError("Could not acquire the champion-promotion lock")
+    try:
         _ensure_registered_model(client)
+        # Extend the TTL before the slowest step in the critical section
+        # (pickling + uploading the ensemble artifact) — a big artifact or a
+        # slow MLflow server taking longer than the initial TTL would
+        # otherwise let the lock silently expire mid-decision, letting a
+        # second concurrent caller (manual retrigger, Celery retry, >1
+        # worker concurrency) into the same promotion race this lock exists
+        # to prevent.
+        lock.extend(_PROMOTION_LOCK_TIMEOUT_SECONDS, replace_ttl=True)
         _log_ensemble_artifact(training_result.model_version, training_result.ensemble)
 
         model_uri = f"runs:/{training_result.model_version}/{ARTIFACT_PATH}"
@@ -118,21 +136,45 @@ def register_and_maybe_promote(training_result: TrainingResult) -> RegistryDecis
             name=REGISTERED_MODEL_NAME, source=model_uri, run_id=training_result.model_version
         )
 
+        # These two failure modes must NOT be conflated: "no champion has
+        # ever been promoted" (fresh environment — always promote) is a
+        # different situation from "a champion exists but its validation
+        # log loss metric can't be read" (deleted run, metric-key rename, a
+        # partial mlflow.log_metric failure on the day it was trained) — the
+        # latter must NOT fall through to "promote unconditionally," or a
+        # badly regressed retrain can silently replace a good champion just
+        # because its metric happened to be unreadable.
         try:
             current_champion = client.get_model_version_by_alias(
                 REGISTERED_MODEL_NAME, CHAMPION_ALIAS
             )
-            champion_loss = client.get_run(current_champion.run_id).data.metrics.get(
-                _ENSEMBLE_METRIC_KEY
-            )
         except MlflowException:
             current_champion = None
-            champion_loss = None
+
+        champion_loss = None
+        if current_champion is not None:
+            try:
+                champion_loss = client.get_run(current_champion.run_id).data.metrics.get(
+                    _ENSEMBLE_METRIC_KEY
+                )
+            except MlflowException:
+                champion_loss = None
+            if champion_loss is None:
+                logger.warning(
+                    "champion_metric_unreadable_keeping_current_champion",
+                    champion_run_id=current_champion.run_id,
+                )
 
         challenger_loss = training_result.ensemble.validation_log_loss.get(PredictorName.ENSEMBLE)
-        promote = champion_loss is None or (
-            challenger_loss is not None and challenger_loss < champion_loss
-        )
+        if current_champion is None:
+            promote = True
+        elif champion_loss is None:
+            # Can't verify the challenger is actually better than an
+            # unreadable baseline — refuse to promote rather than gamble on
+            # swapping the production model in the dark.
+            promote = False
+        else:
+            promote = challenger_loss is not None and challenger_loss < champion_loss
 
         if promote:
             client.set_registered_model_alias(
@@ -164,3 +206,8 @@ def register_and_maybe_promote(training_result: TrainingResult) -> RegistryDecis
             serving_ensemble=load_ensemble_from_run(current_champion.run_id),
             serving_model_version=current_champion.run_id,
         )
+    finally:
+        try:
+            lock.release()
+        except LockError:
+            logger.warning("promotion_lock_release_failed_already_expired")

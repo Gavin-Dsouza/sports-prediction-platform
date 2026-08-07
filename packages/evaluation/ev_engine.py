@@ -45,6 +45,33 @@ class MoneylineQuote:
     captured_at: datetime
 
 
+def select_same_book_quote_pair(
+    rows: list[OddsSnapshot],
+) -> tuple[OddsSnapshot, OddsSnapshot] | None:
+    """Pick the HOME+AWAY quote pair from the single most recent poll, both
+    from the same sportsbook. `rows` must already be ordered `captured_at`
+    DESC. Pairing quotes from two different books (e.g. DraftKings' home
+    price with FanDuel's away price) would de-vig a "market" that never
+    actually existed — `ingest_odds_payload` writes every bookmaker's rows
+    for one poll under a single shared `captured_at`, so grouping by that
+    exact timestamp isolates one poll's rows before pairing.
+    """
+    if not rows:
+        return None
+    latest_captured_at = rows[0].captured_at
+    same_poll = [r for r in rows if r.captured_at == latest_captured_at]
+    for book in {r.sportsbook for r in same_poll}:
+        home = next(
+            (r for r in same_poll if r.selection == Selection.HOME and r.sportsbook == book), None
+        )
+        away = next(
+            (r for r in same_poll if r.selection == Selection.AWAY and r.sportsbook == book), None
+        )
+        if home is not None and away is not None:
+            return home, away
+    return None
+
+
 def _latest_moneyline_quote(session: Session, game_id: UUID) -> MoneylineQuote | None:
     stmt = (
         select(OddsSnapshot)
@@ -53,13 +80,19 @@ def _latest_moneyline_quote(session: Session, game_id: UUID) -> MoneylineQuote |
         .limit(20)  # a handful of recent rows to find the latest home+away pair
     )
     recent = list(session.execute(stmt).scalars().all())
-    home_quote = next((q for q in recent if q.selection == Selection.HOME), None)
-    away_quote = next((q for q in recent if q.selection == Selection.AWAY), None)
-    if home_quote is None or away_quote is None:
+    pair = select_same_book_quote_pair(recent)
+    if pair is None:
+        return None
+    home_quote, away_quote = pair
+    if home_quote.implied_probability is None or away_quote.implied_probability is None:
+        # Missing implied_probability is missing data, not a 0% market — never
+        # fabricate a fair price from it (0 would make the other side look
+        # like a mispriced lock and corrupt the displayed edge/EV/Kelly).
+        logger.warning("skipping_quote_missing_implied_probability", game_id=str(game_id))
         return None
 
     home_implied_fair, away_implied_fair = remove_vig_two_way(
-        float(home_quote.implied_probability or 0), float(away_quote.implied_probability or 0)
+        float(home_quote.implied_probability), float(away_quote.implied_probability)
     )
     return MoneylineQuote(
         home_decimal_odds=float(home_quote.price_decimal),
