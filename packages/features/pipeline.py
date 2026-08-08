@@ -90,7 +90,7 @@ def build_game_features(session: Session, game: Game) -> GameFeatures:
         away_team_away_win_pct=builders.away_win_pct(
             session, game.away_team_id, as_of_date, game.season
         ),
-        park_run_factor=get_park_run_factor(game.venue_name),
+        park_run_factor=get_park_run_factor(session, game.venue_name, as_of_date),
         market_home_implied_prob=market["market_home_implied_prob"],
         market_away_implied_prob=market["market_away_implied_prob"],
         market_total_line=market["market_total_line"],
