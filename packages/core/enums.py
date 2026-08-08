@@ -30,12 +30,61 @@ class Market(StrEnum):
 class Sportsbook(StrEnum):
     """Source of an odds quote. Distinct from `Market` so one sportsbook can be
     added (e.g. FLIFF) without touching anything downstream of `odds_snapshots`.
+
+    `THE_ODDS_API_CONSENSUS` is deprecated and no longer written by
+    `packages.ingestion.odds.etl` — it was never an actual computed
+    consensus, just a catch-all label `_BOOKMAKER_KEY_MAP` used for any
+    bookmaker key it didn't explicitly recognize, which silently collapsed
+    N distinct real books into one fake shared identity (see migration 0007
+    for the historical backfill this caused). Kept as an enum member only
+    because Postgres enum values can't be cleanly dropped without recreating
+    the type — nothing should write it going forward.
     """
 
     THE_ODDS_API_CONSENSUS = "the_odds_api_consensus"
     DRAFTKINGS = "draftkings"
     FANDUEL = "fanduel"
+    BETMGM = "betmgm"
+    BOVADA = "bovada"
+    BETRIVERS = "betrivers"
+    BETONLINEAG = "betonlineag"
+    MYBOOKIEAG = "mybookieag"
+    LOWVIG = "lowvig"
+    BETUS = "betus"
     FLIFF = "fliff"  # no public API yet; reserved for manual/future ingestion
+
+
+# Deterministic tie-break for "pick one book" logic (line-movement features,
+# same-book quote pairing for EV) now that `regions=us` routinely returns 8+
+# real books for one game/poll — DraftKings and FanDuel are the two
+# highest-volume US books and the most commonly used reference lines in
+# betting research; the rest are ordered arbitrarily-but-deterministically
+# (alphabetically) so at least the choice is stable and reproducible run to
+# run, not e.g. dependent on Python's set iteration order.
+SPORTSBOOK_PREFERENCE_ORDER: tuple[Sportsbook, ...] = (
+    Sportsbook.DRAFTKINGS,
+    Sportsbook.FANDUEL,
+    Sportsbook.BETMGM,
+    Sportsbook.BETONLINEAG,
+    Sportsbook.BETRIVERS,
+    Sportsbook.BETUS,
+    Sportsbook.BOVADA,
+    Sportsbook.LOWVIG,
+    Sportsbook.MYBOOKIEAG,
+)
+
+
+def pick_preferred_sportsbook(available: set[Sportsbook]) -> Sportsbook | None:
+    """Deterministically pick one book from a set of books that all quoted
+    the same game/poll — used wherever "one representative price" is needed
+    (line-movement features, EV's same-book home+away pairing) so both call
+    sites agree on the same book instead of each making an arbitrary,
+    possibly-different pick.
+    """
+    for book in SPORTSBOOK_PREFERENCE_ORDER:
+        if book in available:
+            return book
+    return next(iter(available), None)
 
 
 class Selection(StrEnum):

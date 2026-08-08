@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from packages.core.db_models import BetRecommendation, Game, OddsSnapshot
-from packages.core.enums import Market, Selection
+from packages.core.enums import Market, Selection, pick_preferred_sportsbook
 from packages.core.logging import get_logger
 from packages.evaluation.odds_math import (
     decimal_to_american,
@@ -55,12 +55,22 @@ def select_same_book_quote_pair(
     actually existed — `ingest_odds_payload` writes every bookmaker's rows
     for one poll under a single shared `captured_at`, so grouping by that
     exact timestamp isolates one poll's rows before pairing.
+
+    Book choice uses the same deterministic preference order as
+    `packages.features.builders._preferred_sportsbook` (both fall back
+    through the list until they find a book with the data they need) so EV
+    and the model's market-implied-probability feature are computed off the
+    same book instead of each independently guessing.
     """
     if not rows:
         return None
     latest_captured_at = rows[0].captured_at
     same_poll = [r for r in rows if r.captured_at == latest_captured_at]
-    for book in {r.sportsbook for r in same_poll}:
+    remaining_books = {r.sportsbook for r in same_poll}
+    while remaining_books:
+        book = pick_preferred_sportsbook(remaining_books)
+        if book is None:
+            return None
         home = next(
             (r for r in same_poll if r.selection == Selection.HOME and r.sportsbook == book), None
         )
@@ -69,6 +79,7 @@ def select_same_book_quote_pair(
         )
         if home is not None and away is not None:
             return home, away
+        remaining_books.discard(book)
     return None
 
 

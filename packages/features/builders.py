@@ -12,7 +12,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from packages.core.db_models import Game, OddsSnapshot, PlayerGameStats
-from packages.core.enums import GameStatus, Market, Selection, Sportsbook
+from packages.core.enums import GameStatus, Market, Selection, Sportsbook, pick_preferred_sportsbook
 
 # Recency-weighted mean: index 0 = most recent game, geometric decay per game
 # back in the window. This is what turns "rolling average" into "rolling
@@ -172,15 +172,15 @@ def _preferred_sportsbook(rows: list[OddsSnapshot]) -> Sportsbook | None:
     — a single poll (`ingest_odds_payload`) writes every book's rows under
     one shared `captured_at`, so without this, "opening" and "latest" (or
     home vs. away) can each resolve to a different, unrelated book's price.
-    Prefers the odds-API consensus book when present (one representative
-    number); otherwise falls back to whichever book most recently quoted.
+    Uses the same deterministic preference order as
+    `packages.evaluation.ev_engine.select_same_book_quote_pair` (see
+    `packages.core.enums.pick_preferred_sportsbook`) so a game's EV
+    calculation and its market-implied-probability feature agree on which
+    book's price they're both looking at.
     """
     if not rows:
         return None
-    books = {r.sportsbook for r in rows}
-    if Sportsbook.THE_ODDS_API_CONSENSUS in books:
-        return Sportsbook.THE_ODDS_API_CONSENSUS
-    return max(rows, key=lambda r: r.captured_at).sportsbook
+    return pick_preferred_sportsbook({r.sportsbook for r in rows})
 
 
 def market_snapshot_features(

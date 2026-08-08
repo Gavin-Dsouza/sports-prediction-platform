@@ -22,6 +22,13 @@ logger = get_logger(__name__)
 _BOOKMAKER_KEY_MAP: dict[str, Sportsbook] = {
     "draftkings": Sportsbook.DRAFTKINGS,
     "fanduel": Sportsbook.FANDUEL,
+    "betmgm": Sportsbook.BETMGM,
+    "bovada": Sportsbook.BOVADA,
+    "betrivers": Sportsbook.BETRIVERS,
+    "betonlineag": Sportsbook.BETONLINEAG,
+    "mybookieag": Sportsbook.MYBOOKIEAG,
+    "lowvig": Sportsbook.LOWVIG,
+    "betus": Sportsbook.BETUS,
 }
 
 _MARKET_KEY_MAP: dict[str, Market] = {
@@ -87,6 +94,7 @@ def ingest_odds_payload(
     games_by_id: dict[str, Game] = {str(game.id): game for game in games}
 
     count = 0
+    unmapped_bookmaker_keys: set[str] = set()
     for event in odds_payload:
         game = _match_game(event, team_name_index, games_by_id)
         if game is None:
@@ -96,9 +104,24 @@ def ingest_odds_payload(
             continue
 
         for bookmaker in event.get("bookmakers", []):
-            sportsbook = _BOOKMAKER_KEY_MAP.get(
-                bookmaker.get("key", ""), Sportsbook.THE_ODDS_API_CONSENSUS
-            )
+            bookmaker_key = bookmaker.get("key", "")
+            sportsbook = _BOOKMAKER_KEY_MAP.get(bookmaker_key)
+            if sportsbook is None:
+                # `regions=us` returns every book The Odds API has for that
+                # region (routinely 8+: betmgm, bovada, betrivers, ...), not
+                # just the two we have real `Sportsbook` enum members for.
+                # `THE_ODDS_API_CONSENSUS` is NOT an actual computed
+                # consensus — it doesn't exist as a distinct concept
+                # anywhere in this pipeline — so silently mapping every
+                # unrecognized book to it (the old behavior) collapsed N
+                # distinct real books into one fake shared identity, which
+                # `uq_odds_snapshots_dedup` (they'd share game/market/
+                # selection/captured_at) then correctly rejects as
+                # duplicates. Skip what we can't honestly label instead of
+                # mislabeling it; add a real enum member (+ migration) to
+                # start tracking a specific book like betmgm.
+                unmapped_bookmaker_keys.add(bookmaker_key)
+                continue
             for market in bookmaker.get("markets", []):
                 our_market = _MARKET_KEY_MAP.get(market.get("key", ""))
                 if our_market is None:
@@ -133,6 +156,12 @@ def ingest_odds_payload(
                     )
                     count += 1
 
+    if unmapped_bookmaker_keys:
+        logger.warning(
+            "odds_snapshots_unmapped_bookmakers_skipped",
+            bookmaker_keys=sorted(unmapped_bookmaker_keys),
+            captured_at=captured_at.isoformat(),
+        )
     logger.info("odds_snapshots_ingested", count=count, captured_at=captured_at.isoformat())
     return count
 
