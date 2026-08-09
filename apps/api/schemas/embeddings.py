@@ -41,3 +41,19 @@ class NearestGamesResponse(BaseModel):
     # consistent with each other. `None` when none of the neighbors have a
     # final score yet to vote with.
     weighted_home_win_probability: float | None
+
+
+class GameSummaryOut(BaseModel):
+    game_id: UUID
+    game_date: date
+    home_team: str
+    away_team: str
+    home_score: int | None
+    away_score: int | None
+    home_win: bool | None
+
+
+class CompareGamesResponse(BaseModel):
+    game_a: GameSummaryOut
+    game_b: GameSummaryOut
+    similarity: float

@@ -5,10 +5,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from apps.api.deps import get_db
-from apps.api.schemas.embeddings import GameEmbeddingOut, NearestGamesResponse, NeighborGameOut
+from apps.api.schemas.embeddings import (
+    CompareGamesResponse,
+    GameEmbeddingOut,
+    GameSummaryOut,
+    NearestGamesResponse,
+    NeighborGameOut,
+)
 from packages.core.db_models import FeatureVector, Game, GameEmbedding
 from packages.core.enums import Sport
-from packages.evaluation.explainability import SimilarGame, find_nearest_games
+from packages.evaluation.explainability import SimilarGame, compare_games, find_nearest_games
 from packages.features.schema import FEATURE_SET_VERSION
 
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
@@ -100,4 +106,60 @@ def nearest_games(
             for n in neighbors
         ],
         weighted_home_win_probability=_weighted_home_win_probability(neighbors),
+    )
+
+
+def _game_summary(game: Game) -> GameSummaryOut:
+    return GameSummaryOut(
+        game_id=game.id,
+        game_date=game.game_date,
+        home_team=game.home_team.abbreviation,
+        away_team=game.away_team.abbreviation,
+        home_score=game.home_score,
+        away_score=game.away_score,
+        home_win=(
+            (game.home_score > game.away_score)
+            if game.home_score is not None and game.away_score is not None
+            else None
+        ),
+    )
+
+
+@router.get("/{game_id}/compare/{other_game_id}", response_model=CompareGamesResponse)
+def compare_two_games(
+    game_id: UUID, other_game_id: UUID, db: Session = Depends(get_db)
+) -> CompareGamesResponse:
+    """Direct pairwise similarity between two specific games — backs the 3D
+    view's lock-and-compare mode (lock a reference game, then click any
+    other point in the point cloud to compare it against the locked one).
+    Unlike `/neighbors`, this allows comparing against a scheduled/upcoming
+    game too, not just completed ones — see `compare_games`.
+    """
+    game_a = (
+        db.execute(
+            select(Game)
+            .options(joinedload(Game.home_team), joinedload(Game.away_team))
+            .where(Game.id == game_id)
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+    game_b = (
+        db.execute(
+            select(Game)
+            .options(joinedload(Game.home_team), joinedload(Game.away_team))
+            .where(Game.id == other_game_id)
+        )
+        .unique()
+        .scalar_one_or_none()
+    )
+    if game_a is None or game_b is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    similarity = compare_games(db, str(game_id), str(other_game_id))
+    if similarity is None:
+        raise HTTPException(status_code=404, detail="No feature vector for one or both games")
+
+    return CompareGamesResponse(
+        game_a=_game_summary(game_a), game_b=_game_summary(game_b), similarity=similarity
     )

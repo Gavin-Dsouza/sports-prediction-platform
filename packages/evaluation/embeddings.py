@@ -68,8 +68,21 @@ def compute_and_persist_embeddings(session: Session) -> int:
     # have the largest raw numbers, not the most informative one.
     scaled = StandardScaler().fit_transform(matrix)
 
-    n_neighbors = min(15, len(rows) - 1)
-    reducer = UMAP(n_components=N_COMPONENTS, n_neighbors=n_neighbors, random_state=42)
+    # Tuned for human navigation, not for preserving tight local structure:
+    # - n_neighbors (UMAP's own parameter, unrelated to KNNPredictor's k)
+    #   controls the local/global tradeoff -- higher values pull UMAP toward
+    #   respecting the dataset's overall shape rather than only each point's
+    #   immediate neighborhood, which is what was producing a few extremely
+    #   dense, disconnected-looking blobs plus scattered singleton outliers.
+    # - min_dist controls how close UMAP is willing to pack points in the
+    #   *output* space. UMAP's own docs are explicit that its default (0.1)
+    #   is tuned for downstream clustering, and recommend something in the
+    #   0.5-0.99 range specifically for visualization, so points don't
+    #   collapse into indistinguishable clumps on screen.
+    n_neighbors = min(30, len(rows) - 1)
+    reducer = UMAP(
+        n_components=N_COMPONENTS, n_neighbors=n_neighbors, min_dist=0.5, random_state=42
+    )
     coords = reducer.fit_transform(scaled)
 
     now = datetime.now(UTC)

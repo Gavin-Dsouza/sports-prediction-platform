@@ -233,6 +233,27 @@ def feature_dict_to_vector(features: dict[str, object], feature_names: list[str]
     )
 
 
+def _zscore_stats(vectors: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """(means, stds) for z-scoring a batch of feature vectors before any
+    cosine-similarity computation in this module. Cosine similarity on raw
+    feature values is dominated by whichever feature happens to have the
+    largest natural scale -- e.g. bullpen_pitches_last3days (mean ~145,
+    stdev ~60) versus something like a win percentage (0-1) or park factor
+    (~1.0). Unscaled, the angle between two games' vectors is almost
+    entirely determined by how close their bullpen pitch counts are, which
+    is why every neighbor used to come back 99.9%+ "similar" regardless of
+    how different the rest of their profile was. Standardizing first gives
+    every feature equal say, matching the same treatment every other
+    distance-based computation in this codebase already gets (KNNPredictor,
+    the UMAP embeddings, LogisticRegressionPredictor's pipeline).
+    """
+    stacked = np.vstack(vectors)
+    means = stacked.mean(axis=0)
+    stds = stacked.std(axis=0)
+    stds[stds == 0] = 1.0  # a zero-variance feature contributes nothing either way
+    return means, stds
+
+
 def _rank_by_cosine_similarity(
     feature_row: dict[str, object], candidates: list[tuple[Game, FeatureVector]], k: int
 ) -> list[SimilarGame]:
@@ -248,17 +269,25 @@ def _rank_by_cosine_similarity(
 
     feature_names = [f for f in feature_row if f not in NON_NUMERIC_FEATURE_KEYS]
     query_vec = feature_dict_to_vector(feature_row, feature_names)
-    query_norm = float(np.linalg.norm(query_vec))
+    candidate_vecs = [
+        feature_dict_to_vector(feature_vector.features, feature_names)
+        for _game, feature_vector in candidates
+    ]
+
+    means, stds = _zscore_stats([query_vec, *candidate_vecs])
+
+    query_scaled = (query_vec - means) / stds
+    query_norm = float(np.linalg.norm(query_scaled))
     if query_norm == 0:
         return []
 
     scored: list[tuple[float, Game]] = []
-    for game, feature_vector in candidates:
-        candidate_vec = feature_dict_to_vector(feature_vector.features, feature_names)
-        candidate_norm = float(np.linalg.norm(candidate_vec))
+    for (game, _feature_vector), candidate_vec in zip(candidates, candidate_vecs, strict=True):
+        candidate_scaled = (candidate_vec - means) / stds
+        candidate_norm = float(np.linalg.norm(candidate_scaled))
         if candidate_norm == 0:
             continue
-        similarity = float(np.dot(query_vec, candidate_vec) / (query_norm * candidate_norm))
+        similarity = float(np.dot(query_scaled, candidate_scaled) / (query_norm * candidate_norm))
         scored.append((similarity, game))
 
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -331,3 +360,41 @@ def find_nearest_games(
     )
     rows = cast(list[tuple[Game, FeatureVector]], session.execute(stmt).unique().all())
     return _rank_by_cosine_similarity(feature_row, rows, k)
+
+
+def compare_games(session: Session, game_id_a: str, game_id_b: str) -> float | None:
+    """Direct pairwise similarity between two specific games — the 3D
+    view's lock-and-compare mode (pick a reference game, then click any
+    other point in the point cloud, including a scheduled/upcoming one, to
+    see exactly how similar it is). Not built on top of `find_nearest_games`
+    because that function's candidate pool is FINAL-games-only (correct for
+    "show me historical games with a real outcome"), which would silently
+    fail to find a scheduled game the user just clicked — this standardizes
+    against every game with a persisted feature vector instead, regardless
+    of status, since either side of a manual comparison may not have been
+    played yet.
+    """
+    rows = session.execute(
+        select(FeatureVector.game_id, FeatureVector.features).where(
+            FeatureVector.feature_set_version == FEATURE_SET_VERSION,
+        )
+    ).all()
+    by_id = {str(game_id): features for game_id, features in rows}
+    features_a = by_id.get(game_id_a)
+    features_b = by_id.get(game_id_b)
+    if features_a is None or features_b is None:
+        return None
+
+    feature_names = [f for f in features_a if f not in NON_NUMERIC_FEATURE_KEYS]
+    vec_a = feature_dict_to_vector(features_a, feature_names)
+    vec_b = feature_dict_to_vector(features_b, feature_names)
+    means, stds = _zscore_stats([feature_dict_to_vector(f, feature_names) for f in by_id.values()])
+
+    a_scaled = (vec_a - means) / stds
+    b_scaled = (vec_b - means) / stds
+    a_norm = float(np.linalg.norm(a_scaled))
+    b_norm = float(np.linalg.norm(b_scaled))
+    if a_norm == 0 or b_norm == 0:
+        return None
+
+    return float(np.dot(a_scaled, b_scaled) / (a_norm * b_norm))

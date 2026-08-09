@@ -180,6 +180,22 @@ export interface NearestGamesResponse {
   weighted_home_win_probability: number | null;
 }
 
+export interface GameSummary {
+  game_id: string;
+  game_date: string;
+  home_team: string;
+  away_team: string;
+  home_score: number | null;
+  away_score: number | null;
+  home_win: boolean | null;
+}
+
+export interface CompareGamesResponse {
+  game_a: GameSummary;
+  game_b: GameSummary;
+  similarity: number;
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl()}${path}`, { cache: "no-store" });
   if (!response.ok) {
@@ -201,4 +217,6 @@ export const api = {
   embeddings: () => fetchJson<GameEmbedding[]>("/embeddings"),
   nearestGames: (gameId: string, k = 10) =>
     fetchJson<NearestGamesResponse>(`/embeddings/${gameId}/neighbors?k=${k}`),
+  compareGames: (gameIdA: string, gameIdB: string) =>
+    fetchJson<CompareGamesResponse>(`/embeddings/${gameIdA}/compare/${gameIdB}`),
 };
