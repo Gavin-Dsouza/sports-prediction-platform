@@ -7,10 +7,18 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { api, type GameEmbedding, type NearestGamesResponse } from "@/lib/api";
 
 function formatDate(iso: string): string {
+  // `timeZone: "UTC"` is required, not cosmetic: this runs both server-side
+  // (SSR, inside the container — UTC) and client-side (hydration, the
+  // browser's local timezone) for a "use client" component. Without a fixed
+  // zone, toLocaleDateString silently uses the runtime's local zone on each
+  // side, which can format the same ISO string as a different calendar day
+  // near midnight UTC — server and client then disagree on the rendered
+  // text, and React throws a hydration mismatch.
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   });
 }
 
@@ -262,6 +270,11 @@ export function ThreeDExplorer({ embeddings }: { embeddings: GameEmbedding[] }) 
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search by team (e.g. NYY, BOS)..."
           className="mb-4 w-full rounded-md border border-slate-700 bg-surface px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-slate-500 focus:outline-none"
+          // Browser extensions (password managers, form fillers) commonly
+          // inject attributes like data-has-listeners onto <input> elements
+          // before React hydrates, which React otherwise flags as a
+          // hydration mismatch even though nothing here is actually wrong.
+          suppressHydrationWarning
         />
         <div className="max-h-96 divide-y divide-slate-800 overflow-y-auto">
           {filtered.map((g) => (
