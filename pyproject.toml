@@ -45,6 +45,7 @@ structlog = "^24.4.0"
 # and packages/worker/tasks.py) since this is a bug in shap's own plotting
 # code, not anything under our control.
 shap = ">=0.46.0"
+umap-learn = "^0.5.7"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"

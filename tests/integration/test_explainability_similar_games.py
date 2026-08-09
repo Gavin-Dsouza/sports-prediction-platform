@@ -6,7 +6,7 @@ from datetime import date
 
 from packages.core.db_models import FeatureVector, Game, Team
 from packages.core.enums import GameStatus, Sport
-from packages.evaluation.explainability import find_similar_historical_games
+from packages.evaluation.explainability import find_nearest_games, find_similar_historical_games
 from packages.features.schema import FEATURE_SET_VERSION
 
 _NON_NUMERIC = {"game_id": "unused", "feature_set_version": FEATURE_SET_VERSION}
@@ -123,3 +123,52 @@ def test_returns_empty_list_with_no_historical_games(db_session):
     results = find_similar_historical_games(db_session, str(target.id), target_features, k=3)
 
     assert results == []
+
+
+def test_find_nearest_games_includes_games_after_the_target_date(db_session):
+    # `find_nearest_games` (the 3D view's lookup) is deliberately NOT
+    # leakage-safe like `find_similar_historical_games` -- an upcoming game
+    # (the usual target for this interactive tool) has no "before/after"
+    # concern, and a free-form exploration tool shouldn't hide a genuinely
+    # similar game just because it happened later.
+    home = _team(db_session, "147", "NYY")
+    away = _team(db_session, "111", "BOS")
+
+    target = _game_with_features(
+        db_session, home, away, {"era_diff": 0.5, "ops_diff": 0.1}, game_date=date(2024, 4, 1)
+    )
+    later_but_close = _game_with_features(
+        db_session, home, away, {"era_diff": 0.52, "ops_diff": 0.11}, game_date=date(2024, 9, 1)
+    )
+    db_session.flush()
+
+    target_features = (
+        db_session.query(FeatureVector).filter(FeatureVector.game_id == target.id).one().features
+    )
+
+    results = find_nearest_games(db_session, str(target.id), target_features, k=5)
+
+    result_ids = [r.game_id for r in results]
+    assert str(later_but_close.id) in result_ids
+    assert str(target.id) not in result_ids
+
+
+def test_find_nearest_games_excludes_non_final_games(db_session):
+    home = _team(db_session, "147", "NYY")
+    away = _team(db_session, "111", "BOS")
+
+    scheduled = _game_with_features(
+        db_session, home, away, {"era_diff": 0.51}, final=False, game_date=date(2024, 9, 1)
+    )
+    target = _game_with_features(
+        db_session, home, away, {"era_diff": 0.5}, game_date=date(2024, 4, 1)
+    )
+    db_session.flush()
+
+    target_features = (
+        db_session.query(FeatureVector).filter(FeatureVector.game_id == target.id).one().features
+    )
+
+    results = find_nearest_games(db_session, str(target.id), target_features, k=5)
+
+    assert str(scheduled.id) not in [r.game_id for r in results]

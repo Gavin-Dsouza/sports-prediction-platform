@@ -17,6 +17,7 @@ import importlib.machinery
 import importlib.util
 import sys
 from dataclasses import dataclass
+from datetime import date
 from types import ModuleType
 from typing import cast
 from uuid import UUID
@@ -99,6 +100,7 @@ class FeatureContribution:
 class SimilarGame:
     game_id: str
     similarity: float
+    game_date: date
     home_team: str
     away_team: str
     home_score: int | None
@@ -209,6 +211,72 @@ def explain_ensemble_prediction(
     }
 
 
+# `feature_row`/each candidate's `features` is the raw `feature_vectors.
+# features` JSONB blob, which includes GameFeatures' own non-numeric
+# bookkeeping fields (`game_id`, `feature_set_version`) alongside the actual
+# engineered features — excluded here or float(game_id) raises trying to
+# parse a UUID string.
+NON_NUMERIC_FEATURE_KEYS = {"game_id", "feature_set_version"}
+
+
+def feature_dict_to_vector(features: dict[str, object], feature_names: list[str]) -> np.ndarray:
+    # bool is a subclass of int, so isinstance(..., (int, float)) covers it
+    # too — deliberately not routed through str() first, which would turn a
+    # boolean feature (e.g. is_neutral_site) into "True"/"False" and make
+    # float() raise on every single row.
+    return np.array(
+        [
+            float(raw) if isinstance((raw := features.get(f, 0.0)), int | float) else 0.0
+            for f in feature_names
+        ],
+        dtype=float,
+    )
+
+
+def _rank_by_cosine_similarity(
+    feature_row: dict[str, object], candidates: list[tuple[Game, FeatureVector]], k: int
+) -> list[SimilarGame]:
+    """Shared core for both `find_similar_historical_games` (explanations,
+    leakage-safe) and `find_nearest_games` (the dashboard's interactive 3D
+    view, no leakage constraint) — the ranking math is identical, only the
+    candidate query differs. O(n) over candidates — fine at current data
+    volume (a few thousand rows); an index (e.g. pgvector) is a reasonable
+    upgrade if this table grows large enough for it to matter, not needed yet.
+    """
+    if not candidates:
+        return []
+
+    feature_names = [f for f in feature_row if f not in NON_NUMERIC_FEATURE_KEYS]
+    query_vec = feature_dict_to_vector(feature_row, feature_names)
+    query_norm = float(np.linalg.norm(query_vec))
+    if query_norm == 0:
+        return []
+
+    scored: list[tuple[float, Game]] = []
+    for game, feature_vector in candidates:
+        candidate_vec = feature_dict_to_vector(feature_vector.features, feature_names)
+        candidate_norm = float(np.linalg.norm(candidate_vec))
+        if candidate_norm == 0:
+            continue
+        similarity = float(np.dot(query_vec, candidate_vec) / (query_norm * candidate_norm))
+        scored.append((similarity, game))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    return [
+        SimilarGame(
+            game_id=str(game.id),
+            similarity=round(similarity, 4),
+            game_date=game.game_date,
+            home_team=game.home_team.abbreviation,
+            away_team=game.away_team.abbreviation,
+            home_score=game.home_score,
+            away_score=game.away_score,
+        )
+        for similarity, game in scored[:k]
+    ]
+
+
 def find_similar_historical_games(
     session: Session, current_game_id: str, feature_row: dict[str, object], k: int = 3
 ) -> list[SimilarGame]:
@@ -216,10 +284,9 @@ def find_similar_historical_games(
     vectors already persisted in `feature_vectors`, restricted to completed
     games that happened before the target game (so "similar historical game"
     is actually historical relative to it, not a same-season game that just
-    happens to have been ingested already). O(n) over historical games — fine
-    at current data volume (a few thousand rows); an index (e.g. pgvector) is
-    a reasonable upgrade if this table grows large enough for it to matter,
-    not needed yet.
+    happens to have been ingested already) — the leakage discipline needed
+    when this feeds a prediction explanation. See `find_nearest_games` for
+    the version without that constraint.
     """
     current_game = session.get(Game, UUID(current_game_id))
     if current_game is None:
@@ -237,54 +304,30 @@ def find_similar_historical_games(
             Game.game_date < current_game.game_date,
         )
     )
-    rows = session.execute(stmt).unique().all()
-    if not rows:
-        return []
+    rows = cast(list[tuple[Game, FeatureVector]], session.execute(stmt).unique().all())
+    return _rank_by_cosine_similarity(feature_row, rows, k)
 
-    # `feature_row` is the raw `feature_vectors.features` JSONB blob, which
-    # includes GameFeatures' own non-numeric bookkeeping fields (`game_id`,
-    # `feature_set_version`) alongside the actual engineered features —
-    # excluded here or float(game_id) raises trying to parse a UUID string.
-    _NON_NUMERIC_KEYS = {"game_id", "feature_set_version"}
-    feature_names = [f for f in feature_row if f not in _NON_NUMERIC_KEYS]
 
-    def _to_vector(features: dict[str, object]) -> np.ndarray:
-        # bool is a subclass of int, so isinstance(..., (int, float)) covers
-        # it too — deliberately not routed through str() first, which would
-        # turn a boolean feature (e.g. is_neutral_site) into "True"/"False"
-        # and make float() raise on every single row.
-        return np.array(
-            [
-                float(raw) if isinstance((raw := features.get(f, 0.0)), int | float) else 0.0
-                for f in feature_names
-            ],
-            dtype=float,
+def find_nearest_games(
+    session: Session, current_game_id: str, feature_row: dict[str, object], k: int = 10
+) -> list[SimilarGame]:
+    """Like `find_similar_historical_games`, without the "must predate the
+    target" constraint — appropriate for interactive exploration (the
+    dashboard's 3D view) where the target is usually an upcoming game with
+    no real "before/after" concern, unlike backtesting. Still restricted to
+    completed (FINAL) games as candidates, since only those have a real
+    outcome to look at, and still excludes the target game itself.
+    """
+    stmt = (
+        select(Game, FeatureVector)
+        .join(FeatureVector, FeatureVector.game_id == Game.id)
+        .options(joinedload(Game.home_team), joinedload(Game.away_team))
+        .where(
+            Game.sport == Sport.MLB,
+            Game.status == GameStatus.FINAL,
+            FeatureVector.feature_set_version == FEATURE_SET_VERSION,
+            Game.id != current_game_id,
         )
-
-    query_vec = _to_vector(feature_row)
-    query_norm = float(np.linalg.norm(query_vec))
-    if query_norm == 0:
-        return []
-
-    scored: list[tuple[float, Game]] = []
-    for game, feature_vector in rows:
-        candidate_vec = _to_vector(feature_vector.features)
-        candidate_norm = float(np.linalg.norm(candidate_vec))
-        if candidate_norm == 0:
-            continue
-        similarity = float(np.dot(query_vec, candidate_vec) / (query_norm * candidate_norm))
-        scored.append((similarity, game))
-
-    scored.sort(key=lambda item: item[0], reverse=True)
-
-    return [
-        SimilarGame(
-            game_id=str(game.id),
-            similarity=round(similarity, 4),
-            home_team=game.home_team.abbreviation,
-            away_team=game.away_team.abbreviation,
-            home_score=game.home_score,
-            away_score=game.away_score,
-        )
-        for similarity, game in scored[:k]
-    ]
+    )
+    rows = cast(list[tuple[Game, FeatureVector]], session.execute(stmt).unique().all())
+    return _rank_by_cosine_similarity(feature_row, rows, k)

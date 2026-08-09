@@ -16,6 +16,7 @@ from packages.core.enums import PredictorName
 from packages.core.logging import get_logger
 from packages.models.base import Predictor
 from packages.models.elo import EloPredictor
+from packages.models.knn import KNNPredictor
 from packages.models.logistic_regression import LogisticRegressionPredictor
 from packages.models.poisson_model import PoissonPredictor
 from packages.models.xgboost_model import XGBoostPredictor
@@ -27,7 +28,13 @@ MIN_VALIDATION_ROWS = 20
 
 
 def _default_predictors() -> list[Predictor]:
-    return [EloPredictor(), PoissonPredictor(), LogisticRegressionPredictor(), XGBoostPredictor()]
+    return [
+        EloPredictor(),
+        PoissonPredictor(),
+        LogisticRegressionPredictor(),
+        XGBoostPredictor(),
+        KNNPredictor(),
+    ]
 
 
 class WeightedEnsemble:

@@ -105,6 +105,7 @@ class PredictorName(StrEnum):
     POISSON = "poisson"
     LOGISTIC_REGRESSION = "logistic_regression"
     XGBOOST = "xgboost"
+    KNN = "knn"
     ENSEMBLE = "ensemble"
 
 

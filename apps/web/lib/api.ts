@@ -1,4 +1,18 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Two different base URLs are needed depending on where the fetch actually
+// runs: server-side (Next.js Server Components — the only kind of fetch
+// this app had until the 3D view's client-side neighbor lookup) executes
+// inside the `web` container's own network namespace, where Docker
+// Compose's internal DNS resolves the service name "api"; a client-side
+// ("use client") fetch runs in the browser on the host machine, entirely
+// outside that Docker network, where only the published host port
+// (localhost:8000) is reachable. See infra/docker-compose.yml's `web`
+// service for how each is configured.
+const SERVER_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const BROWSER_API_URL = process.env.NEXT_PUBLIC_API_URL_BROWSER ?? "http://localhost:8000";
+
+function apiBaseUrl(): string {
+  return typeof window === "undefined" ? SERVER_API_URL : BROWSER_API_URL;
+}
 
 export interface Team {
   id: string;
@@ -34,6 +48,7 @@ export interface FeatureReason {
 export interface SimilarGame {
   game_id: string;
   similarity: number;
+  game_date: string;
   home_team: string;
   away_team: string;
   home_score: number | null;
@@ -135,8 +150,38 @@ export interface Parlay {
   legs: ParlayLeg[];
 }
 
+export interface GameEmbedding {
+  game_id: string;
+  x: number;
+  y: number;
+  z: number;
+  game_date: string;
+  status: string;
+  home_team: string;
+  away_team: string;
+  home_score: number | null;
+  away_score: number | null;
+}
+
+export interface NeighborGame {
+  game_id: string;
+  similarity: number;
+  game_date: string;
+  home_team: string;
+  away_team: string;
+  home_score: number | null;
+  away_score: number | null;
+  home_win: boolean | null;
+}
+
+export interface NearestGamesResponse {
+  target_game_id: string;
+  neighbors: NeighborGame[];
+  weighted_home_win_probability: number | null;
+}
+
 async function fetchJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+  const response = await fetch(`${apiBaseUrl()}${path}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`API request failed: ${response.status} ${path}`);
   }
@@ -153,4 +198,7 @@ export const api = {
   lineMovement: (gameId: string) => fetchJson<OddsPoint[]>(`/games/${gameId}/line-movement`),
   recentInjuries: (days = 7) => fetchJson<Injury[]>(`/injuries/recent?days=${days}`),
   parlays: (on?: string) => fetchJson<Parlay[]>(`/parlays${on ? `?on=${on}` : ""}`),
+  embeddings: () => fetchJson<GameEmbedding[]>("/embeddings"),
+  nearestGames: (gameId: string, k = 10) =>
+    fetchJson<NearestGamesResponse>(`/embeddings/${gameId}/neighbors?k=${k}`),
 };

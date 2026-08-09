@@ -23,6 +23,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <a href="/backtests" className="hover:text-slate-100">
                   Backtests
                 </a>
+                <a href="/3d" className="hover:text-slate-100">
+                  3D View
+                </a>
               </nav>
             </div>
           </header>

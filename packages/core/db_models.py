@@ -292,6 +292,36 @@ class FeatureVector(Base):
     )
 
 
+class GameEmbedding(Base):
+    """3D projection (UMAP, fit on the full engineered feature space) of one
+    game, for the dashboard's exploratory 3D view. A visual aid only — actual
+    "nearest neighbor" computations (the KNN predictor, the neighbor list
+    shown alongside this view) use real distance in the full feature space,
+    not these 3 coordinates, which necessarily lose information in exchange
+    for being plottable. Refreshed as a batch job since UMAP is a global,
+    dataset-relative projection: recomputing it for one new game shifts where
+    every other point sits, so there's no meaningful "add one row" update.
+    """
+
+    __tablename__ = "game_embeddings"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    game_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("games.id"), nullable=False, index=True)
+    feature_set_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    x: Mapped[float] = mapped_column(nullable=False)
+    y: Mapped[float] = mapped_column(nullable=False)
+    z: Mapped[float] = mapped_column(nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "game_id", "feature_set_version", name="uq_game_embeddings_game_feature_version"
+        ),
+    )
+
+
 class Prediction(Base):
     __tablename__ = "predictions"
 

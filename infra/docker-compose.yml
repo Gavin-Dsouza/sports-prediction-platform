@@ -131,15 +131,19 @@ services:
       dockerfile: infra/docker/web.Dockerfile
     restart: unless-stopped
     environment:
-      # Every fetch in apps/web currently happens server-side (Next.js Server
-      # Components, no "use client" fetches), so this only needs to resolve
-      # from inside the web container's network namespace, where "localhost"
-      # means the web container itself, not the api container. Docker
-      # Compose's internal DNS resolves the service name "api" to the right
-      # container. If a client-side fetch is ever added, it'll need the
-      # host-visible http://localhost:8000 instead, since the browser runs
-      # outside this Docker network entirely.
+      # Two URLs because fetches now happen from two different network
+      # namespaces (see apps/web/lib/api.ts for which one each fetch uses):
+      # - NEXT_PUBLIC_API_URL: for server-side fetches (Next.js Server
+      #   Components — most of the app), which execute inside this
+      #   container, where Docker Compose's internal DNS resolves the
+      #   service name "api" to the right container.
+      # - NEXT_PUBLIC_API_URL_BROWSER: for client-side ("use client")
+      #   fetches — first added by the 3D view's interactive neighbor
+      #   lookup — which execute in the browser on the host machine,
+      #   entirely outside this Docker network, where only the published
+      #   host port is reachable.
       NEXT_PUBLIC_API_URL: http://api:8000
+      NEXT_PUBLIC_API_URL_BROWSER: http://localhost:8000
     ports:
       - "3000:3000"
     volumes:
