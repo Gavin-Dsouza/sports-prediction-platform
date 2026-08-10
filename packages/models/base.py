@@ -45,9 +45,20 @@ def numeric_feature_columns(frame: pd.DataFrame) -> list[str]:
 class Predictor(Protocol):
     name: PredictorName
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
         """`frame` includes IDENTITY_COLUMNS + engineered features, one row
         per historical game, ordered by `game_date` ascending.
+
+        `sample_weight`, when given, is one weight per row (same order as
+        `frame`) — see `packages.models.dataset.error_weight`: a game whose
+        last real prediction turned out wrong gets weighted above the 1.0
+        baseline, proportional to how wrong it was, so the next day's
+        retrain is pushed to correct its own specific past mistakes rather
+        than just seeing marginally more data. Not every model can honor
+        this the same way (Elo and KNNPredictor accept and ignore it — see
+        their own docstrings for why); implementations that can't must
+        still accept the parameter so the ensemble can call every model
+        uniformly.
         """
         ...
 

@@ -29,11 +29,11 @@ class XGBoostPredictor:
         self._model = xgb.XGBClassifier(**default_params)
         self._feature_columns: list[str] = []
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
         self._feature_columns = numeric_feature_columns(frame)
         X = frame[self._feature_columns]
         y = frame["home_win"].astype(int)
-        self._model.fit(X, y)
+        self._model.fit(X, y, sample_weight=sample_weight)
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
         X = frame[self._feature_columns]

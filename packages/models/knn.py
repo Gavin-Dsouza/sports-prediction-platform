@@ -30,7 +30,15 @@ class KNNPredictor:
         self._pipeline: Pipeline | None = None
         self._feature_columns: list[str] = []
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
+        # `sample_weight` is accepted (for a uniform Predictor.fit signature
+        # the ensemble can call every model through) but deliberately
+        # ignored: KNeighborsClassifier doesn't support it at all -- it has
+        # no real "fit" step to weight, just stores the training points for
+        # distance-weighted lookup at prediction time. There's no clean
+        # native equivalent (simulating it by duplicating high-weight rows
+        # would change which points are even eligible as neighbors, a much
+        # bigger behavioral change than what every other model here gets).
         self._feature_columns = numeric_feature_columns(frame)
         X = frame[self._feature_columns]
         y = frame["home_win"].astype(int)

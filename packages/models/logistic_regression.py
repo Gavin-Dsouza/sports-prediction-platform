@@ -38,11 +38,17 @@ class LogisticRegressionPredictor:
         )
         self._feature_columns: list[str] = []
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
         self._feature_columns = numeric_feature_columns(frame)
         X = frame[self._feature_columns]
         y = frame["home_win"].astype(int)
-        self._pipeline.fit(X, y)
+        # A Pipeline's fit_params must be prefixed with the target step's
+        # name (sklearn's convention for routing a kwarg to one specific
+        # step rather than every step) -- "clf" is the classifier step
+        # defined in __init__ above; impute/scale don't take sample_weight
+        # at all.
+        fit_params = {} if sample_weight is None else {"clf__sample_weight": sample_weight}
+        self._pipeline.fit(X, y, **fit_params)
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:
         X = frame[self._feature_columns]

@@ -43,7 +43,17 @@ class EloPredictor:
             for team_id, rating in self.ratings.items()
         }
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
+        # `sample_weight` is accepted (for a uniform Predictor.fit signature
+        # the ensemble can call every model through) but deliberately
+        # ignored: Elo already has its own, different error-correction
+        # mechanism built into the algorithm itself -- the K-factor update
+        # is already proportional to (actual - expected) *for that specific
+        # game*, every single game, using Elo's own current rating estimate
+        # rather than the ensemble's blended prediction. Layering the
+        # ensemble's error-weight on top would be double-correcting off two
+        # different notions of "wrong" rather than a clean extension.
+        #
         # `itertuples()` column types are inferred by pandas-stubs as a huge
         # dtype union (it can't know from a DataFrame's runtime dtypes alone
         # that a given column is always str) — explicit str()/float() below

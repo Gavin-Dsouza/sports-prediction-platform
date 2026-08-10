@@ -35,7 +35,7 @@ class PoissonPredictor:
         self._away_results: GLMResultsWrapper | None = None
         self._feature_columns: list[str] = []
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
         candidate_columns = numeric_feature_columns(frame)
         numeric_frame = _numeric_matrix(frame, candidate_columns)
 
@@ -58,11 +58,26 @@ class PoissonPredictor:
         self._feature_columns = [c for c in candidate_columns if numeric_frame[c].std(ddof=0) > 0]
         X = sm.add_constant(numeric_frame[self._feature_columns])
 
+        # `var_weights`, not `freq_weights`: statsmodels' freq_weights means
+        # literal integer repeat-counts ("this row represents N identical
+        # observations"), which isn't the right semantics for a continuous
+        # importance score. var_weights scales the variance function
+        # (Var[y] = Var[y]/var_weight), and GLM's IRLS solve weights
+        # observations inversely by variance -- so a HIGHER var_weight
+        # means the observation is treated as more precise/trustworthy and
+        # pulls the fit harder, which is exactly "weight this game's error
+        # more."
         self._home_results = sm.GLM(
-            frame["home_score"].astype(float), X, family=sm.families.Poisson()
+            frame["home_score"].astype(float),
+            X,
+            family=sm.families.Poisson(),
+            var_weights=sample_weight,
         ).fit(maxiter=50)
         self._away_results = sm.GLM(
-            frame["away_score"].astype(float), X, family=sm.families.Poisson()
+            frame["away_score"].astype(float),
+            X,
+            family=sm.families.Poisson(),
+            var_weights=sample_weight,
         ).fit(maxiter=50)
 
     def predict_proba(self, frame: pd.DataFrame) -> np.ndarray:

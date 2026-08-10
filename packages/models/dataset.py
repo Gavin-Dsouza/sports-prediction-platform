@@ -2,12 +2,13 @@
 one row per game, identity columns + persisted engineered features.
 """
 
+import numpy as np
 import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from packages.core.db_models import FeatureVector, Game
-from packages.core.enums import GameStatus, Sport
+from packages.core.db_models import FeatureVector, Game, Prediction
+from packages.core.enums import GameStatus, Market, PredictorName, Selection, Sport
 from packages.features.schema import FEATURE_SET_VERSION
 from packages.models.base import numeric_feature_columns
 
@@ -113,3 +114,73 @@ def build_inference_frame(session: Session, game_ids: list[str]) -> pd.DataFrame
     frame = pd.DataFrame(rows)
     frame = frame.drop(columns=["feature_set_version"], errors="ignore")
     return _coerce_numeric_features(frame)
+
+
+# Every row starts at this weight; a game whose last real prediction turned
+# out wrong is boosted above it, proportional to how wrong that prediction
+# was (see `error_weight`). Never goes below 1.0 -- this only ever asks a
+# model to pay *more* attention to specific past mistakes, never less
+# attention to everything else, which stays as informative as it already was.
+ERROR_WEIGHT_BASELINE = 1.0
+# A totally-wrong, fully-confident prediction (residual = 1.0, e.g. called
+# 99% home win and the away team won) gets baseline + ALPHA = 4x the weight
+# of a game with no error to correct. Deliberately conservative: sports
+# outcomes are noisy (a well-calibrated 60% favorite still loses 40% of the
+# time), so most of what looks like "the model was wrong" is variance, not a
+# correctable pattern -- leaning too hard into every miss risks teaching the
+# model to chase noise instead of signal. Validated via the same honest
+# walk-forward backtest as everything else before this was trusted, not
+# assumed to help just because the mechanism sounds reasonable.
+ERROR_WEIGHT_ALPHA = 3.0
+
+
+def error_weight(predicted_prob: float, actual_home_win: float) -> float:
+    """The weight one game gets in the *next* retrain, given what was
+    predicted for it (before it was played) and what actually happened.
+    Shared by the production path (`compute_error_weights`, driven by real
+    stored `Prediction` rows) and the backtest's point-in-time simulation of
+    the same mechanism (`packages.evaluation.backtest`), so both apply
+    identical math.
+    """
+    residual = abs(predicted_prob - actual_home_win)
+    return ERROR_WEIGHT_BASELINE + ERROR_WEIGHT_ALPHA * residual
+
+
+def compute_error_weights(session: Session, frame: pd.DataFrame) -> np.ndarray:
+    """One weight per row in `frame` (same order), for the *production*
+    daily retrain: reads each game's real, already-stored ensemble
+    prediction (made the day it was played, before the outcome was known)
+    and compares it to what actually happened. A game with no stored
+    prediction (most of history, predating this platform's daily pipeline)
+    gets the neutral baseline -- there's nothing to correct if we never
+    actually predicted it.
+    """
+    game_ids = frame["game_id"].tolist()
+    rows = session.execute(
+        select(Prediction.game_id, Prediction.probability, Prediction.predicted_at)
+        .where(
+            Prediction.game_id.in_(game_ids),
+            Prediction.predictor_name == PredictorName.ENSEMBLE,
+            Prediction.market == Market.MONEYLINE,
+            Prediction.selection == Selection.HOME,
+        )
+        .order_by(Prediction.predicted_at.desc())
+    ).all()
+    # A game can have more than one stored ensemble prediction (e.g. a
+    # same-day manual retrigger that changed which model_version served) --
+    # ordering by predicted_at desc above and keeping only the first hit per
+    # game_id below takes the most recent one, the real prediction that was
+    # actually live right before the game was decided.
+    latest_prediction_by_game: dict[str, float] = {}
+    for game_id, probability, _predicted_at in rows:
+        game_id_str = str(game_id)
+        if game_id_str not in latest_prediction_by_game:
+            latest_prediction_by_game[game_id_str] = float(probability)
+
+    weights = np.full(len(frame), ERROR_WEIGHT_BASELINE)
+    for i, row in enumerate(frame.itertuples(index=False)):
+        predicted = latest_prediction_by_game.get(str(row.game_id))  # type: ignore[attr-defined]
+        if predicted is None:
+            continue
+        weights[i] = error_weight(predicted, float(row.home_win))  # type: ignore[arg-type]
+    return weights

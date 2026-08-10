@@ -31,7 +31,7 @@ from packages.core.logging import get_logger
 from packages.evaluation.ev_engine import FRACTIONAL_KELLY_MULTIPLIER, select_same_book_quote_pair
 from packages.evaluation.metrics import BacktestMetrics, BetOutcome, compute_backtest_metrics
 from packages.evaluation.odds_math import expected_value, kelly_fraction, remove_vig_two_way
-from packages.models.dataset import build_training_frame
+from packages.models.dataset import ERROR_WEIGHT_BASELINE, build_training_frame, error_weight
 from packages.models.ensemble import WeightedEnsemble
 
 logger = get_logger(__name__)
@@ -108,7 +108,18 @@ def run_walk_forward_backtest(
     *,
     retrain_every_days: int = DEFAULT_RETRAIN_EVERY_DAYS,
     min_train_games: int = DEFAULT_MIN_TRAIN_GAMES,
+    use_error_weighting: bool = False,
 ) -> BacktestMetrics:
+    """`use_error_weighting=True` faithfully simulates the production
+    error-weighting mechanism (`packages.models.training.train_ensemble`)
+    point-in-time: when a game rolls from some earlier checkpoint's
+    `test_frame` into a later checkpoint's `train_frame`, it's reweighted by
+    how wrong *this backtest's own* prediction for it was -- not by reading
+    the real `Prediction` table, since a walk-forward backtest is
+    deliberately using an earlier-vintage model than whatever actually
+    predicted these games for real, and mixing the two would leak
+    information the backtest isn't supposed to have.
+    """
     full_frame = build_training_frame(session)
     if full_frame.empty:
         raise ValueError("No games with persisted features available to backtest.")
@@ -116,6 +127,10 @@ def run_walk_forward_backtest(
     predicted_probs: list[float] = []
     actual_outcomes: list[int] = []
     bet_outcomes: list[BetOutcome] = []
+    # Populated (only under use_error_weighting) as each checkpoint predicts
+    # its test_frame; read back below once those same games later appear in
+    # a subsequent checkpoint's train_frame.
+    predicted_prob_by_game_id: dict[str, float] = {}
 
     for checkpoint_start, checkpoint_end in _iter_checkpoints(
         start_date, end_date, retrain_every_days
@@ -128,8 +143,21 @@ def run_walk_forward_backtest(
         if len(train_frame) < min_train_games or test_frame.empty:
             continue
 
+        sample_weight = None
+        if use_error_weighting and predicted_prob_by_game_id:
+            sample_weight = np.array(
+                [
+                    error_weight(predicted_prob_by_game_id[game_id], home_win)
+                    if game_id in predicted_prob_by_game_id
+                    else ERROR_WEIGHT_BASELINE
+                    for game_id, home_win in zip(
+                        train_frame["game_id"], train_frame["home_win"], strict=True
+                    )
+                ]
+            )
+
         ensemble = WeightedEnsemble()
-        ensemble.fit(train_frame)
+        ensemble.fit(train_frame, sample_weight=sample_weight)
         home_win_probs = ensemble.predict_proba(test_frame)
 
         for i, row in enumerate(test_frame.itertuples(index=False)):
@@ -137,6 +165,8 @@ def run_walk_forward_backtest(
             actual_home_win = int(row.home_win)  # type: ignore[arg-type]
             predicted_probs.append(predicted_home_prob)
             actual_outcomes.append(actual_home_win)
+            if use_error_weighting:
+                predicted_prob_by_game_id[str(row.game_id)] = predicted_home_prob  # type: ignore[attr-defined]
 
             quote = _historical_moneyline_quote(session, str(row.game_id))
             if quote is None:

@@ -51,7 +51,7 @@ class WeightedEnsemble:
         self.weights: dict[PredictorName, float] = {}
         self.validation_log_loss: dict[PredictorName, float] = {}
 
-    def fit(self, frame: pd.DataFrame) -> None:
+    def fit(self, frame: pd.DataFrame, sample_weight: np.ndarray | None = None) -> None:
         # `game_date` alone has no tiebreak for doubleheaders (two games,
         # same teams, same date) — sorting on `game_datetime` too, with a
         # stable sort algorithm (pandas' default `quicksort` gives no
@@ -59,15 +59,28 @@ class WeightedEnsemble:
         # update (see `EloPredictor.fit`) from ever processing a
         # chronologically-later game before an earlier one, which would leak
         # that later result into the earlier game's expected-win-probability.
+        #
+        # `sample_weight` must survive this same sort+split unchanged in
+        # meaning (weight[i] must still refer to the same game after
+        # reordering) -- attaching it as a real column before sorting, then
+        # popping it back off after, is the simplest way to guarantee that
+        # without a second, easy-to-desync manual permutation of the array.
+        frame = frame.copy()
+        if sample_weight is not None:
+            frame["_sample_weight"] = sample_weight
         frame = frame.sort_values(["game_date", "game_datetime"], kind="stable").reset_index(
             drop=True
         )
+        if sample_weight is not None:
+            sample_weight = frame.pop("_sample_weight").to_numpy()
+
         split_idx = max(
             len(frame) - max(int(len(frame) * VALIDATION_FRACTION), MIN_VALIDATION_ROWS),
             1,
         )
         train_frame = frame.iloc[:split_idx]
         val_frame = frame.iloc[split_idx:]
+        train_weight = sample_weight[:split_idx] if sample_weight is not None else None
 
         # Per-model start/done logging: `ensemble.fit()` used to be a single
         # silent black box until everything finished, which makes it
@@ -80,7 +93,7 @@ class WeightedEnsemble:
         for predictor in self.predictors:
             logger.info("predictor_fit_start", predictor=predictor.name.value, phase="validation")
             started = time.monotonic()
-            predictor.fit(train_frame)
+            predictor.fit(train_frame, sample_weight=train_weight)
             logger.info(
                 "predictor_fit_done",
                 predictor=predictor.name.value,
@@ -128,7 +141,7 @@ class WeightedEnsemble:
         for predictor in self.predictors:
             logger.info("predictor_fit_start", predictor=predictor.name.value, phase="full")
             started = time.monotonic()
-            predictor.fit(frame)
+            predictor.fit(frame, sample_weight=sample_weight)
             logger.info(
                 "predictor_fit_done",
                 predictor=predictor.name.value,
